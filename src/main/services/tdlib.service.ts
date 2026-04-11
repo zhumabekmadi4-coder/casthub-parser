@@ -223,7 +223,7 @@ export function registerTdlibHandlers(): void {
         }
 
         const text = extractText(msg);
-        if (text && text.length >= 50) {
+        if (text && text.length >= 20) {
           try {
             await processMessage({
               chatId,
@@ -292,7 +292,7 @@ function startMessageListener() {
         textLength: text?.length ?? 0,
       });
 
-      if (!text || text.length < 50) {
+      if (!text || text.length < 20) {
         console.log(`[TDLib] Skipped: too short`);
         return;
       }

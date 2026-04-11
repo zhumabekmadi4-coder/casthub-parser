@@ -58,7 +58,7 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
   // Sanitize text before any processing (AI, SQLite, queue)
   const text = msg.text ? sanitizeText(msg.text) : null;
 
-  if (!text || text.length < 50) return;
+  if (!text || text.length < 20) return;
 
   // Build forward origin key
   const forwardOrigin = forwardInfo?.origin
