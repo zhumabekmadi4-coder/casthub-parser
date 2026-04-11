@@ -3,13 +3,15 @@ import Dashboard from "./pages/Dashboard";
 import Settings from "./pages/Settings";
 import Queue from "./pages/Queue";
 import ChatManager from "./pages/ChatManager";
+import Logs from "./pages/Logs";
 
-type Page = "dashboard" | "chats" | "queue" | "settings";
+type Page = "dashboard" | "chats" | "queue" | "logs" | "settings";
 
 const navItems: { id: Page; label: string; icon: string }[] = [
   { id: "dashboard", label: "Дашборд", icon: "📊" },
   { id: "chats", label: "Чаты", icon: "💬" },
   { id: "queue", label: "Очередь", icon: "📋" },
+  { id: "logs", label: "Логи", icon: "📜" },
   { id: "settings", label: "Настройки", icon: "⚙️" },
 ];
 
@@ -96,6 +98,7 @@ export default function App() {
         {page === "dashboard" && <Dashboard />}
         {page === "chats" && <ChatManager />}
         {page === "queue" && <Queue />}
+        {page === "logs" && <Logs />}
         {page === "settings" && <Settings />}
       </main>
     </div>

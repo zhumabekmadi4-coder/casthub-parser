@@ -10,6 +10,21 @@ interface QueueItem {
   created_at: string;
 }
 
+function formatDate(dateStr: string): string {
+  try {
+    const d = new Date(dateStr + "Z"); // SQLite stores UTC without Z
+    return d.toLocaleString("ru-RU", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return dateStr;
+  }
+}
+
 const statusLabels: Record<string, { label: string; color: string }> = {
   pending: { label: "Ожидает", color: "bg-blue-100 text-blue-700" },
   review: { label: "На модерации", color: "bg-yellow-100 text-yellow-700" },
@@ -133,7 +148,7 @@ export default function Queue() {
                     {parsed.title ?? "Без заголовка"}
                   </span>
                   <span className="text-[10px] text-gray-400 shrink-0">
-                    {item.created_at}
+                    {formatDate(item.created_at)}
                   </span>
                 </div>
 
