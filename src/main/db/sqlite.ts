@@ -209,7 +209,8 @@ CRITICAL RULES:
    - "episodic" for "второстепенная роль", supporting roles, or roles not marked as main
    - "background" for "массовка", "эпизод без слов", crowd scenes
 3. AGE — use the EXACT numbers written for THIS specific role. Do NOT copy age from other roles.
-4. PAYMENT — set ONLY if payment is explicitly mentioned for THIS specific role. If payment is mentioned for a different role or generally, set null for this role.
+4. PAYMENT — if payment is explicitly mentioned for this role, use it. If not mentioned or unclear, write "Договорная". Never return null for payment.
+5. DESCRIPTION — if no description found, return empty string "". Never return null for description.
 
 Only return valid JSON.`,
     ],
@@ -218,10 +219,11 @@ Only return valid JSON.`,
       `Extract details for the job position "{vacancyName}" from this announcement. Return JSON:
 {
   "professionName": "profession name in Russian",
-  "payment": "payment info or null",
-  "schedule": "schedule info or null",
-  "requirements": "requirements or null"
+  "payment": "payment info or Договорная if not specified",
+  "schedule": "schedule info or empty string if not specified",
+  "requirements": "requirements or empty string if not specified"
 }
+Never return null for any field. Use empty string "" if information is not found. For payment use "Договорная" if not specified.
 Only return valid JSON.`,
     ],
   ];
