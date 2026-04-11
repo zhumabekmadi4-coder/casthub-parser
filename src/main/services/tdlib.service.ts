@@ -4,6 +4,7 @@ import * as prebuilt from "prebuilt-tdlib";
 import path from "path";
 import { app } from "electron";
 import { dbAll, dbGet, dbRun } from "../db/sqlite";
+import { processMessage } from "./pipeline.service";
 
 let client: ReturnType<typeof tdl.createClient> | null = null;
 let authState: string = "idle";
@@ -184,25 +185,23 @@ export function registerTdlibHandlers(): void {
     }
   );
 
-  // History sync
+  // History sync — fetches messages from newest to oldest, stops at collect_from_date
   ipcMain.handle("tdlib:sync-history", async (_e, chatId: number) => {
     if (!client || authState !== "ready") return { synced: 0 };
 
     const chat = dbGet("SELECT * FROM monitored_chats WHERE chat_id = ?", [chatId]);
-
     if (!chat) return { synced: 0 };
 
-    const fromMessageId = chat.last_processed_message_id || 0;
     let synced = 0;
-    let lastId = fromMessageId;
+    let fromMsgId = 0; // 0 = start from newest message
+    let reachedDateLimit = false;
 
-    // Fetch in batches of 50
-    for (let i = 0; i < 20; i++) {
-      // Max 1000 messages
+    // Fetch in batches of 50, up to 1000 messages total
+    for (let i = 0; i < 20 && !reachedDateLimit; i++) {
       const history = await client.invoke({
         _: "getChatHistory",
         chat_id: chatId,
-        from_message_id: lastId,
+        from_message_id: fromMsgId,
         offset: 0,
         limit: 50,
         only_local: false,
@@ -213,32 +212,42 @@ export function registerTdlibHandlers(): void {
       for (const msg of history.messages) {
         if (!msg) continue;
 
-        // Check collect_from_date
+        // Check collect_from_date — stop if message is older
         if (chat.collect_from_date) {
           const msgDate = new Date(msg.date * 1000);
           const fromDate = new Date(chat.collect_from_date);
-          if (msgDate < fromDate) continue;
+          if (msgDate < fromDate) {
+            reachedDateLimit = true;
+            break;
+          }
         }
 
-        // Emit to pipeline
-        sendToRenderer("pipeline:new-message", {
-          chatId,
-          messageId: msg.id,
-          text: extractText(msg),
-          date: msg.date,
-          senderUserId: msg.sender_id?.user_id || null,
-          forwardInfo: msg.forward_info || null,
-        });
-        synced++;
-        lastId = msg.id;
+        const text = extractText(msg);
+        if (text && text.length >= 50) {
+          try {
+            await processMessage({
+              chatId,
+              messageId: msg.id,
+              text,
+              date: msg.date,
+              senderUserId: msg.sender_id?.user_id || null,
+              forwardInfo: msg.forward_info || null,
+            });
+            synced++;
+          } catch (err) {
+            console.error("Pipeline error during sync:", err);
+          }
+        }
+
+        fromMsgId = msg.id;
       }
     }
 
-    // Update last processed
-    if (lastId > fromMessageId) {
+    // Update last_processed_message_id to the newest message
+    if (synced > 0) {
       dbRun(
         "UPDATE monitored_chats SET last_processed_message_id = ? WHERE chat_id = ?",
-        [lastId, chatId]
+        [fromMsgId, chatId]
       );
     }
 
@@ -284,14 +293,15 @@ function startMessageListener() {
         [msg.id, msg.chat_id]
       );
 
-      sendToRenderer("pipeline:new-message", {
+      // Process through AI pipeline
+      processMessage({
         chatId: msg.chat_id,
         messageId: msg.id,
         text,
         date: msg.date,
         senderUserId: msg.sender_id?.user_id || null,
         forwardInfo: msg.forward_info || null,
-      });
+      }).catch((err) => console.error("Pipeline error:", err));
     }
   };
 
