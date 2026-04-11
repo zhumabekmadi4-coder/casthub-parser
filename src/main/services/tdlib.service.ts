@@ -4,7 +4,7 @@ import * as prebuilt from "prebuilt-tdlib";
 import path from "path";
 import { app } from "electron";
 import { dbAll, dbGet, dbRun } from "../db/sqlite";
-import { processMessage } from "./pipeline.service";
+import { processMessage, logEvent } from "./pipeline.service";
 
 let client: ReturnType<typeof tdl.createClient> | null = null;
 let authState: string = "idle";
@@ -283,9 +283,7 @@ function startMessageListener() {
       if (!msg || !monitoredChatIds.has(msg.chat_id)) return;
 
       const text = extractText(msg);
-      console.log(`[TDLib] New message in chat ${msg.chat_id}, msgId=${msg.id}, len=${text?.length ?? 0}`);
-
-      sendToRenderer("pipeline:event", {
+      logEvent({
         type: "incoming",
         chatId: msg.chat_id,
         messageId: msg.id,

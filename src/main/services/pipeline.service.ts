@@ -8,10 +8,21 @@ import { sanitizeText } from "./sanitize";
 
 let provider: AiProvider | null = null;
 
+// In-memory log buffer (last 500 events)
+const eventLog: any[] = [];
+const MAX_LOG_SIZE = 500;
+
 function sendToRenderer(channel: string, ...args: any[]) {
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send(channel, ...args);
   }
+}
+
+export function logEvent(event: any) {
+  const entry = { ...event, _time: new Date().toISOString() };
+  eventLog.unshift(entry);
+  if (eventLog.length > MAX_LOG_SIZE) eventLog.length = MAX_LOG_SIZE;
+  sendToRenderer("pipeline:event", entry);
 }
 
 function getPrompt(key: string): string {
@@ -67,7 +78,7 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
 
   // Dedup check
   if (isDuplicate(chatId, messageId, text, forwardOrigin)) {
-    sendToRenderer("pipeline:event", {
+    logEvent( {
       type: "skipped",
       reason: "duplicate",
       chatId,
@@ -84,7 +95,7 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
     classification = await ai.checkRelevance(text, getPrompt("relevance_check"));
   } catch (err) {
     markProcessed(chatId, messageId, text, "error", forwardOrigin);
-    sendToRenderer("pipeline:event", {
+    logEvent( {
       type: "error",
       step: "relevance",
       error: String(err),
@@ -96,7 +107,7 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
 
   if (classification === "skip") {
     markProcessed(chatId, messageId, text, "skip", forwardOrigin);
-    sendToRenderer("pipeline:event", {
+    logEvent( {
       type: "skipped",
       reason: "irrelevant",
       chatId,
@@ -142,7 +153,7 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
     meta.contacts.telegram || meta.contacts.whatsapp || meta.contacts.phone;
   if (!finalHasContact) {
     markProcessed(chatId, messageId, text, classification, forwardOrigin);
-    sendToRenderer("pipeline:event", {
+    logEvent( {
       type: "skipped",
       reason: "no_contacts",
       chatId,
@@ -262,7 +273,7 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
 
   markProcessed(chatId, messageId, text, classification, forwardOrigin);
 
-  sendToRenderer("pipeline:event", {
+  logEvent( {
     type: "processed",
     classification,
     title: meta.title,
@@ -287,7 +298,7 @@ function enqueueFailed(
     [externalIdHash(chatId, messageId), text, "{}", status, error]
   );
 
-  sendToRenderer("pipeline:event", {
+  logEvent( {
     type: "error",
     error,
     chatId,
@@ -296,6 +307,17 @@ function enqueueFailed(
 }
 
 export function registerPipelineHandlers(): void {
+  // Get stored event log
+  ipcMain.handle("pipeline:get-logs", () => {
+    return eventLog;
+  });
+
+  // Clear event log
+  ipcMain.handle("pipeline:clear-logs", () => {
+    eventLog.length = 0;
+    return true;
+  });
+
   // Process a single message (called from renderer or tdlib service)
   ipcMain.handle("pipeline:process", async (_e, msg: MessagePayload) => {
     try {

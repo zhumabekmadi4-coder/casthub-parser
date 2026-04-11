@@ -1,5 +1,6 @@
-import { ipcMain, BrowserWindow } from "electron";
+import { ipcMain } from "electron";
 import { dbAll, dbGet, dbRun } from "../db/sqlite";
+import { logEvent } from "./pipeline.service";
 
 function getSetting(key: string): string {
   const row = dbGet("SELECT value FROM settings WHERE key = ?", [key]);
@@ -62,11 +63,6 @@ export function getProfessionsCache() {
   return professionsCache;
 }
 
-function sendToRenderer(channel: string, ...args: any[]) {
-  for (const win of BrowserWindow.getAllWindows()) {
-    win.webContents.send(channel, ...args);
-  }
-}
 
 async function deliverItem(item: any): Promise<{ ok: boolean; error?: string; projectId?: string }> {
   const apiUrl = getSetting("casthub_api_url");
@@ -124,7 +120,7 @@ async function deliveryLoop(): Promise<{ delivered: number; failed: number }> {
       );
       delivered++;
 
-      sendToRenderer("pipeline:event", {
+      logEvent({
         type: "delivered",
         title: JSON.parse(item.parsed_data).title,
         projectId: result.projectId,
@@ -139,7 +135,7 @@ async function deliveryLoop(): Promise<{ delivered: number; failed: number }> {
       failed++;
 
       if (status === "failed") {
-        sendToRenderer("pipeline:event", {
+        logEvent({
           type: "error",
           error: `Delivery failed after 5 retries: ${result.error}`,
         });

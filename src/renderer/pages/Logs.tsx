@@ -19,11 +19,26 @@ export default function Logs() {
   const [filter, setFilter] = useState<string>("");
   const logsRef = useRef<LogEntry[]>([]);
 
+  // Load existing logs from main process
   useEffect(() => {
+    window.api.pipeline.getLogs().then((stored: any[]) => {
+      const entries = stored.map((e) => ({
+        ...e,
+        time: new Date(e._time).toLocaleTimeString("ru-RU", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        }),
+      }));
+      logsRef.current = entries;
+      setLogs(entries);
+    });
+
+    // Listen for new events
     const unsub = window.api.on("pipeline:event", (event: any) => {
       const entry: LogEntry = {
         ...event,
-        time: new Date().toLocaleTimeString("ru-RU", {
+        time: new Date(event._time || Date.now()).toLocaleTimeString("ru-RU", {
           hour: "2-digit",
           minute: "2-digit",
           second: "2-digit",
@@ -47,7 +62,7 @@ export default function Logs() {
         <h2 className="text-xl font-bold">Логи</h2>
         <div className="flex gap-2">
           <button
-            onClick={() => { logsRef.current = []; setLogs([]); }}
+            onClick={() => { window.api.pipeline.clearLogs(); logsRef.current = []; setLogs([]); }}
             className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50"
           >
             Очистить
