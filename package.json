@@ -1,0 +1,41 @@
+{
+  "name": "casthub-parser",
+  "version": "1.0.0",
+  "description": "Telegram parser for CastHub.kz — collects casting/job announcements",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "package": "electron-builder"
+  },
+  "keywords": [],
+  "author": "Antigravity",
+  "license": "MIT",
+  "dependencies": {
+    "@tanstack/react-query": "^5.97.0",
+    "better-sqlite3": "^12.8.0",
+    "openai": "^6.34.0",
+    "prebuilt-tdlib": "^0.1008063.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "tdl": "^8.1.0",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.3",
+    "@tailwindcss/vite": "^4.2.2",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^4.7.0",
+    "autoprefixer": "^10.4.27",
+    "electron": "^28.3.3",
+    "electron-builder": "^26.8.1",
+    "electron-vite": "^2.3.0",
+    "postcss": "^8.5.9",
+    "tailwindcss": "^3.4.19",
+    "typescript": "^6.0.2",
+    "vite": "^5.4.21"
+  }
+}

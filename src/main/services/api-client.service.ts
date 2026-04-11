@@ -1,0 +1,153 @@
+import { ipcMain, BrowserWindow } from "electron";
+import { getDb } from "../db/sqlite";
+
+function getSetting(key: string): string {
+  const db = getDb();
+  const row = db
+    .prepare("SELECT value FROM settings WHERE key = ?")
+    .get(key) as { value: string } | undefined;
+  return row?.value ?? "";
+}
+
+function sendToRenderer(channel: string, ...args: any[]) {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send(channel, ...args);
+  }
+}
+
+async function deliverItem(item: any): Promise<{ ok: boolean; error?: string; projectId?: string }> {
+  const apiUrl = getSetting("casthub_api_url");
+  const apiKey = getSetting("casthub_api_key");
+
+  if (!apiUrl || !apiKey) {
+    return { ok: false, error: "CastHub API not configured" };
+  }
+
+  const parsedData = JSON.parse(item.parsed_data);
+
+  try {
+    const response = await fetch(`${apiUrl}/api/import`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(parsedData),
+    });
+
+    if (response.status === 409) {
+      // Duplicate — already exists on CastHub
+      return { ok: true, projectId: "duplicate" };
+    }
+
+    if (!response.ok) {
+      const body = await response.text();
+      return { ok: false, error: `HTTP ${response.status}: ${body}` };
+    }
+
+    const result = await response.json();
+    return { ok: true, projectId: result.id };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
+// Delivery loop — process pending items
+async function deliveryLoop(): Promise<{ delivered: number; failed: number }> {
+  const db = getDb();
+  const items = db
+    .prepare(
+      "SELECT * FROM import_queue WHERE status = 'pending' AND retry_count < 5 ORDER BY created_at ASC LIMIT 10"
+    )
+    .all() as any[];
+
+  let delivered = 0;
+  let failed = 0;
+
+  for (const item of items) {
+    const result = await deliverItem(item);
+
+    if (result.ok) {
+      db.prepare(
+        "UPDATE import_queue SET status = 'delivered', casthub_project_id = ?, delivered_at = datetime('now') WHERE id = ?"
+      ).run(result.projectId, item.id);
+      delivered++;
+
+      sendToRenderer("pipeline:event", {
+        type: "delivered",
+        title: JSON.parse(item.parsed_data).title,
+        projectId: result.projectId,
+      });
+    } else {
+      const retryCount = item.retry_count + 1;
+      const status = retryCount >= 5 ? "failed" : "pending";
+      db.prepare(
+        "UPDATE import_queue SET status = ?, error = ?, retry_count = ? WHERE id = ?"
+      ).run(status, result.error, retryCount, item.id);
+      failed++;
+
+      if (status === "failed") {
+        sendToRenderer("pipeline:event", {
+          type: "error",
+          error: `Delivery failed after 5 retries: ${result.error}`,
+        });
+      }
+    }
+
+    // Small delay between deliveries
+    await new Promise((r) => setTimeout(r, 500));
+  }
+
+  return { delivered, failed };
+}
+
+let deliveryInterval: ReturnType<typeof setInterval> | null = null;
+
+export function registerApiClientHandlers(): void {
+  // Manual delivery trigger
+  ipcMain.handle("api:deliver-now", async () => {
+    return await deliveryLoop();
+  });
+
+  // Test connection
+  ipcMain.handle("api:test-connection", async () => {
+    const apiUrl = getSetting("casthub_api_url");
+    const apiKey = getSetting("casthub_api_key");
+
+    if (!apiUrl || !apiKey) {
+      return { ok: false, error: "API not configured" };
+    }
+
+    try {
+      const response = await fetch(`${apiUrl}/api/cities`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      return { ok: response.ok, status: response.status };
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
+  });
+
+  // Start auto-delivery (every 30 seconds)
+  ipcMain.handle("api:start-delivery", () => {
+    if (deliveryInterval) return { ok: true, already: true };
+    deliveryInterval = setInterval(async () => {
+      try {
+        await deliveryLoop();
+      } catch (err) {
+        console.error("Delivery loop error:", err);
+      }
+    }, 30_000);
+    // Also run immediately
+    deliveryLoop().catch(console.error);
+    return { ok: true };
+  });
+
+  ipcMain.handle("api:stop-delivery", () => {
+    if (deliveryInterval) {
+      clearInterval(deliveryInterval);
+      deliveryInterval = null;
+    }
+    return { ok: true };
+  });
+}

@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.db
+tdlib_db/
+tdlib_files/
+.env
+.env.local
