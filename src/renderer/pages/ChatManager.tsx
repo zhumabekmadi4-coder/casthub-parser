@@ -30,7 +30,19 @@ export default function ChatManager() {
   const [authHint, setAuthHint] = useState("");
 
   useEffect(() => {
-    window.api.tdlib.getAuthState().then(setAuthState);
+    window.api.tdlib.getAuthState().then((state) => {
+      setAuthState(state);
+      // If not connected, try auto-connect with saved credentials
+      if (state === "idle") {
+        window.api.settings.getAll().then((s) => {
+          if (s.tdlib_api_id && s.tdlib_api_hash) {
+            setApiId(s.tdlib_api_id);
+            setApiHash(s.tdlib_api_hash);
+            window.api.tdlib.connect(parseInt(s.tdlib_api_id), s.tdlib_api_hash);
+          }
+        });
+      }
+    });
     loadMonitoredChats();
 
     const unsub = window.api.on("tdlib:auth-state", (state: string, hint?: string) => {
@@ -48,6 +60,9 @@ export default function ChatManager() {
   const handleConnect = async () => {
     const id = parseInt(apiId);
     if (!id || !apiHash) return;
+    // Save credentials for next launch
+    await window.api.settings.set("tdlib_api_id", apiId);
+    await window.api.settings.set("tdlib_api_hash", apiHash);
     await window.api.tdlib.connect(id, apiHash);
   };
 
