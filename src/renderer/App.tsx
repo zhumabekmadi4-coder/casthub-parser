@@ -19,8 +19,17 @@ export default function App() {
   const [apiOk, setApiOk] = useState<boolean | null>(null);
 
   useEffect(() => {
-    // Check TDLib auth state
-    window.api.tdlib.getAuthState().then(setTgState);
+    // Check TDLib auth state and auto-connect if credentials saved
+    window.api.tdlib.getAuthState().then((state) => {
+      setTgState(state);
+      if (state === "idle") {
+        window.api.settings.getAll().then((s) => {
+          if (s.tdlib_api_id && s.tdlib_api_hash) {
+            window.api.tdlib.connect(parseInt(s.tdlib_api_id), s.tdlib_api_hash);
+          }
+        });
+      }
+    });
 
     // Check API connection
     window.api.api.testConnection().then((r) => setApiOk(r.ok));

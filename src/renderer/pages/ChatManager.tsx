@@ -30,18 +30,11 @@ export default function ChatManager() {
   const [authHint, setAuthHint] = useState("");
 
   useEffect(() => {
-    window.api.tdlib.getAuthState().then((state) => {
-      setAuthState(state);
-      // If not connected, try auto-connect with saved credentials
-      if (state === "idle") {
-        window.api.settings.getAll().then((s) => {
-          if (s.tdlib_api_id && s.tdlib_api_hash) {
-            setApiId(s.tdlib_api_id);
-            setApiHash(s.tdlib_api_hash);
-            window.api.tdlib.connect(parseInt(s.tdlib_api_id), s.tdlib_api_hash);
-          }
-        });
-      }
+    window.api.tdlib.getAuthState().then(setAuthState);
+    // Load saved credentials for display
+    window.api.settings.getAll().then((s) => {
+      if (s.tdlib_api_id) setApiId(s.tdlib_api_id);
+      if (s.tdlib_api_hash) setApiHash(s.tdlib_api_hash);
     });
     loadMonitoredChats();
 
