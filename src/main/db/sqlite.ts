@@ -155,11 +155,14 @@ function runMigrations(): void {
   const defaultPrompts: [string, string][] = [
     [
       "relevance_check",
-      `You are a classifier for a film industry job board in Kazakhstan.
-Determine if the message is:
-- "casting" — looking for actors (any roles, extras, models)
-- "technical" — looking for crew (cameraman, editor, sound engineer, lighting, makeup, etc.)
-- "skip" — not a job/casting announcement
+      `You are a classifier for a creative industry job board in Kazakhstan.
+Determine if the message is a job/casting announcement.
+
+- "casting" — looking for ACTORS: people to appear on screen or stage (actors, models, extras, dancers, presenters, voice-over artists)
+- "technical" — looking for SPECIALISTS to perform a task or job in the creative industry: video, photo, design, sound, editing, marketing, management, or any other professional service. This includes ANY paid work request for a specialist, not just film crews.
+- "skip" — NOT a job or casting announcement (chitchat, news, memes, ads for products/services, self-promotion)
+
+If unsure between casting and technical: if they need a person TO PERFORM (act, model, appear) → casting. If they need a person TO DO WORK (shoot, edit, design, manage) → technical.
 
 Reply with ONLY one word: casting, technical, or skip.`,
     ],
