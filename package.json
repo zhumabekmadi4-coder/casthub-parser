@@ -14,18 +14,17 @@
   "license": "MIT",
   "dependencies": {
     "@tanstack/react-query": "^5.97.0",
-    "better-sqlite3": "^12.8.0",
     "openai": "^6.34.0",
     "prebuilt-tdlib": "^0.1008063.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
+    "sql.js": "^1.14.1",
     "tdl": "^8.1.0",
     "zustand": "^5.0.12"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.3",
     "@tailwindcss/vite": "^4.2.2",
-    "@types/better-sqlite3": "^7.6.13",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.7.0",

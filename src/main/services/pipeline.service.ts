@@ -1,5 +1,5 @@
 import { ipcMain, BrowserWindow } from "electron";
-import { getDb } from "../db/sqlite";
+import { dbGet, dbRun } from "../db/sqlite";
 import { isDuplicate, markProcessed, externalIdHash, cleanOldEntries } from "./dedup.service";
 import { OpenAIProvider } from "./ai/openai.provider";
 import type { AiProvider, ExtractedMeta } from "./ai/provider.interface";
@@ -13,18 +13,12 @@ function sendToRenderer(channel: string, ...args: any[]) {
 }
 
 function getPrompt(key: string): string {
-  const db = getDb();
-  const row = db
-    .prepare("SELECT system_prompt FROM prompts WHERE key = ?")
-    .get(key) as { system_prompt: string } | undefined;
+  const row = dbGet("SELECT system_prompt FROM prompts WHERE key = ?", [key]);
   return row?.system_prompt ?? "";
 }
 
 function getSetting(key: string): string {
-  const db = getDb();
-  const row = db
-    .prepare("SELECT value FROM settings WHERE key = ?")
-    .get(key) as { value: string } | undefined;
+  const row = dbGet("SELECT value FROM settings WHERE key = ?", [key]);
   return row?.value ?? "";
 }
 
@@ -223,18 +217,17 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
   };
 
   // Add to queue
-  const db = getDb();
   const autoPublish = getSetting("auto_publish") === "true";
 
-  db.prepare(
+  dbRun(
     `INSERT INTO import_queue (content_hash, raw_text, parsed_data, status)
-     VALUES (?, ?, ?, ?)`
-  ).run(
+     VALUES (?, ?, ?, ?)`,
+    [
     externalIdHash(chatId, messageId),
     text,
     JSON.stringify(parsedData),
-    autoPublish ? "pending" : "review"
-  );
+    autoPublish ? "pending" : "review",
+  ]);
 
   markProcessed(chatId, messageId, text, classification, forwardOrigin);
 
@@ -257,11 +250,11 @@ function enqueueFailed(
   status: string,
   error: string
 ) {
-  const db = getDb();
-  db.prepare(
+  dbRun(
     `INSERT INTO import_queue (content_hash, raw_text, parsed_data, status, error)
-     VALUES (?, ?, ?, ?, ?)`
-  ).run(externalIdHash(chatId, messageId), text, "{}", status, error);
+     VALUES (?, ?, ?, ?, ?)`,
+    [externalIdHash(chatId, messageId), text, "{}", status, error]
+  );
 
   sendToRenderer("pipeline:event", {
     type: "error",

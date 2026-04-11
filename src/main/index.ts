@@ -1,5 +1,11 @@
 import { app, BrowserWindow } from "electron";
 import * as path from "path";
+import { initDb } from "./db/sqlite";
+import { registerSettingsHandlers } from "./services/settings.service";
+import { registerQueueHandlers } from "./services/queue.service";
+import { registerTdlibHandlers } from "./services/tdlib.service";
+import { registerPipelineHandlers } from "./services/pipeline.service";
+import { registerApiClientHandlers } from "./services/api-client.service";
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -28,17 +34,9 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   try {
-    const { initDb } = require("./db/sqlite");
-    initDb();
-
-    const { registerSettingsHandlers } = require("./services/settings.service");
-    const { registerQueueHandlers } = require("./services/queue.service");
-    const { registerTdlibHandlers } = require("./services/tdlib.service");
-    const { registerPipelineHandlers } = require("./services/pipeline.service");
-    const { registerApiClientHandlers } = require("./services/api-client.service");
-
+    await initDb();
     registerSettingsHandlers();
     registerQueueHandlers();
     registerTdlibHandlers();

@@ -3,7 +3,7 @@ import * as tdl from "tdl";
 import * as prebuilt from "prebuilt-tdlib";
 import path from "path";
 import { app } from "electron";
-import { getDb } from "../db/sqlite";
+import { dbAll, dbGet, dbRun } from "../db/sqlite";
 
 let client: ReturnType<typeof tdl.createClient> | null = null;
 let authState: string = "idle";
@@ -155,33 +155,31 @@ export function registerTdlibHandlers(): void {
   });
 
   ipcMain.handle("tdlib:add-chat", (_e, chatId: number, title: string) => {
-    const db = getDb();
-    db.prepare(
-      "INSERT OR IGNORE INTO monitored_chats (chat_id, title) VALUES (?, ?)"
-    ).run(chatId, title);
+    dbRun(
+      "INSERT OR IGNORE INTO monitored_chats (chat_id, title) VALUES (?, ?)",
+      [chatId, title]
+    );
     monitoredChatIds.add(chatId);
     return true;
   });
 
   ipcMain.handle("tdlib:remove-chat", (_e, chatId: number) => {
-    const db = getDb();
-    db.prepare("DELETE FROM monitored_chats WHERE chat_id = ?").run(chatId);
+    dbRun("DELETE FROM monitored_chats WHERE chat_id = ?", [chatId]);
     monitoredChatIds.delete(chatId);
     return true;
   });
 
   ipcMain.handle("tdlib:get-monitored-chats", () => {
-    const db = getDb();
-    return db.prepare("SELECT * FROM monitored_chats ORDER BY added_at DESC").all();
+    return dbAll("SELECT * FROM monitored_chats ORDER BY added_at DESC");
   });
 
   ipcMain.handle(
     "tdlib:set-collect-from",
     (_e, chatId: number, date: string) => {
-      const db = getDb();
-      db.prepare(
-        "UPDATE monitored_chats SET collect_from_date = ? WHERE chat_id = ?"
-      ).run(date, chatId);
+      dbRun(
+        "UPDATE monitored_chats SET collect_from_date = ? WHERE chat_id = ?",
+        [date, chatId]
+      );
       return true;
     }
   );
@@ -190,10 +188,7 @@ export function registerTdlibHandlers(): void {
   ipcMain.handle("tdlib:sync-history", async (_e, chatId: number) => {
     if (!client || authState !== "ready") return { synced: 0 };
 
-    const db = getDb();
-    const chat = db
-      .prepare("SELECT * FROM monitored_chats WHERE chat_id = ?")
-      .get(chatId) as any;
+    const chat = dbGet("SELECT * FROM monitored_chats WHERE chat_id = ?", [chatId]);
 
     if (!chat) return { synced: 0 };
 
@@ -241,9 +236,10 @@ export function registerTdlibHandlers(): void {
 
     // Update last processed
     if (lastId > fromMessageId) {
-      db.prepare(
-        "UPDATE monitored_chats SET last_processed_message_id = ? WHERE chat_id = ?"
-      ).run(lastId, chatId);
+      dbRun(
+        "UPDATE monitored_chats SET last_processed_message_id = ? WHERE chat_id = ?",
+        [lastId, chatId]
+      );
     }
 
     return { synced };
@@ -265,11 +261,8 @@ export function registerTdlibHandlers(): void {
 }
 
 function loadMonitoredChats() {
-  const db = getDb();
-  const chats = db.prepare("SELECT chat_id FROM monitored_chats").all() as {
-    chat_id: number;
-  }[];
-  monitoredChatIds = new Set(chats.map((c) => c.chat_id));
+  const chats = dbAll("SELECT chat_id FROM monitored_chats");
+  monitoredChatIds = new Set(chats.map((c: any) => c.chat_id));
 }
 
 function startMessageListener() {
@@ -284,12 +277,12 @@ function startMessageListener() {
       if (!text || text.length < 50) return; // Pre-filter: too short
 
       // Update last_processed_message_id
-      const db = getDb();
-      db.prepare(
+      dbRun(
         `UPDATE monitored_chats
          SET last_processed_message_id = MAX(COALESCE(last_processed_message_id, 0), ?)
-         WHERE chat_id = ?`
-      ).run(msg.id, msg.chat_id);
+         WHERE chat_id = ?`,
+        [msg.id, msg.chat_id]
+      );
 
       sendToRenderer("pipeline:new-message", {
         chatId: msg.chat_id,

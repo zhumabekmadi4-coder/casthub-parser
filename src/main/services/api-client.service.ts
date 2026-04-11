@@ -1,11 +1,8 @@
 import { ipcMain, BrowserWindow } from "electron";
-import { getDb } from "../db/sqlite";
+import { dbAll, dbGet, dbRun } from "../db/sqlite";
 
 function getSetting(key: string): string {
-  const db = getDb();
-  const row = db
-    .prepare("SELECT value FROM settings WHERE key = ?")
-    .get(key) as { value: string } | undefined;
+  const row = dbGet("SELECT value FROM settings WHERE key = ?", [key]);
   return row?.value ?? "";
 }
 
@@ -54,12 +51,9 @@ async function deliverItem(item: any): Promise<{ ok: boolean; error?: string; pr
 
 // Delivery loop — process pending items
 async function deliveryLoop(): Promise<{ delivered: number; failed: number }> {
-  const db = getDb();
-  const items = db
-    .prepare(
-      "SELECT * FROM import_queue WHERE status = 'pending' AND retry_count < 5 ORDER BY created_at ASC LIMIT 10"
-    )
-    .all() as any[];
+  const items = dbAll(
+    "SELECT * FROM import_queue WHERE status = 'pending' AND retry_count < 5 ORDER BY created_at ASC LIMIT 10"
+  );
 
   let delivered = 0;
   let failed = 0;
@@ -68,9 +62,10 @@ async function deliveryLoop(): Promise<{ delivered: number; failed: number }> {
     const result = await deliverItem(item);
 
     if (result.ok) {
-      db.prepare(
-        "UPDATE import_queue SET status = 'delivered', casthub_project_id = ?, delivered_at = datetime('now') WHERE id = ?"
-      ).run(result.projectId, item.id);
+      dbRun(
+        "UPDATE import_queue SET status = 'delivered', casthub_project_id = ?, delivered_at = datetime('now') WHERE id = ?",
+        [result.projectId, item.id]
+      );
       delivered++;
 
       sendToRenderer("pipeline:event", {
@@ -81,9 +76,10 @@ async function deliveryLoop(): Promise<{ delivered: number; failed: number }> {
     } else {
       const retryCount = item.retry_count + 1;
       const status = retryCount >= 5 ? "failed" : "pending";
-      db.prepare(
-        "UPDATE import_queue SET status = ?, error = ?, retry_count = ? WHERE id = ?"
-      ).run(status, result.error, retryCount, item.id);
+      dbRun(
+        "UPDATE import_queue SET status = ?, error = ?, retry_count = ? WHERE id = ?",
+        [status, result.error, retryCount, item.id]
+      );
       failed++;
 
       if (status === "failed") {

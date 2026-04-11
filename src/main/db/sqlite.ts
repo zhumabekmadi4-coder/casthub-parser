@@ -1,35 +1,89 @@
-import Database from "better-sqlite3";
+import initSqlJs, { Database as SqlJsDatabase } from "sql.js";
 import path from "path";
+import fs from "fs";
 import { app } from "electron";
 
-let db: Database.Database;
+let db: SqlJsDatabase;
+let dbPath: string;
 
-export function getDb(): Database.Database {
+export function getDb(): SqlJsDatabase {
   if (!db) {
     throw new Error("Database not initialized. Call initDb() first.");
   }
   return db;
 }
 
-export function initDb(): void {
-  const dbPath = path.join(app.getPath("userData"), "casthub-parser.db");
-  db = new Database(dbPath);
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
+// Save database to disk
+function saveDb(): void {
+  if (!db || !dbPath) return;
+  const data = db.export();
+  const buffer = Buffer.from(data);
+  fs.writeFileSync(dbPath, buffer);
+}
+
+// Auto-save every 5 seconds
+let saveInterval: ReturnType<typeof setInterval> | null = null;
+
+export async function initDb(): Promise<void> {
+  const SQL = await initSqlJs();
+
+  dbPath = path.join(app.getPath("userData"), "casthub-parser.db");
+
+  // Load existing database if it exists
+  if (fs.existsSync(dbPath)) {
+    const buffer = fs.readFileSync(dbPath);
+    db = new SQL.Database(buffer);
+  } else {
+    db = new SQL.Database();
+  }
 
   runMigrations();
+  saveDb();
+
+  // Auto-save periodically
+  saveInterval = setInterval(saveDb, 5000);
+
+  // Save on app quit
+  app.on("before-quit", () => {
+    saveDb();
+    if (saveInterval) clearInterval(saveInterval);
+  });
+}
+
+// Helper to run a query and get results as objects
+export function dbAll(sql: string, params: any[] = []): any[] {
+  const stmt = db.prepare(sql);
+  if (params.length) stmt.bind(params);
+  const results: any[] = [];
+  while (stmt.step()) {
+    results.push(stmt.getAsObject());
+  }
+  stmt.free();
+  return results;
+}
+
+export function dbGet(sql: string, params: any[] = []): any | undefined {
+  const results = dbAll(sql, params);
+  return results[0];
+}
+
+export function dbRun(sql: string, params: any[] = []): void {
+  db.run(sql, params);
+  saveDb();
 }
 
 function runMigrations(): void {
-  db.exec(`
+  db.run(`
     CREATE TABLE IF NOT EXISTS monitored_chats (
       chat_id INTEGER PRIMARY KEY,
       title TEXT NOT NULL,
       last_processed_message_id INTEGER,
       collect_from_date TEXT,
       added_at TEXT DEFAULT (datetime('now'))
-    );
+    )
+  `);
 
+  db.run(`
     CREATE TABLE IF NOT EXISTS processed_messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       chat_id INTEGER NOT NULL,
@@ -39,11 +93,15 @@ function runMigrations(): void {
       classification TEXT,
       processed_at TEXT DEFAULT (datetime('now')),
       UNIQUE(chat_id, message_id)
-    );
+    )
+  `);
 
+  db.run(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_content_hash
-      ON processed_messages(content_hash);
+      ON processed_messages(content_hash)
+  `);
 
+  db.run(`
     CREATE TABLE IF NOT EXISTS import_queue (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       content_hash TEXT NOT NULL,
@@ -55,19 +113,23 @@ function runMigrations(): void {
       retry_count INTEGER DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now')),
       delivered_at TEXT
-    );
+    )
+  `);
 
+  db.run(`
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
-    );
+    )
+  `);
 
+  db.run(`
     CREATE TABLE IF NOT EXISTS prompts (
       key TEXT PRIMARY KEY,
       system_prompt TEXT NOT NULL,
       model_override TEXT,
       updated_at TEXT DEFAULT (datetime('now'))
-    );
+    )
   `);
 
   // Insert default settings if not exist
@@ -82,11 +144,11 @@ function runMigrations(): void {
     ["dedup_cache_days", "7"],
   ];
 
-  const insertSetting = db.prepare(
-    "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)"
-  );
   for (const [key, value] of defaults) {
-    insertSetting.run(key, value);
+    db.run(
+      "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+      [key, value]
+    );
   }
 
   // Insert default prompts
@@ -147,10 +209,10 @@ Only return valid JSON.`,
     ],
   ];
 
-  const insertPrompt = db.prepare(
-    "INSERT OR IGNORE INTO prompts (key, system_prompt) VALUES (?, ?)"
-  );
   for (const [key, prompt] of defaultPrompts) {
-    insertPrompt.run(key, prompt);
+    db.run(
+      "INSERT OR IGNORE INTO prompts (key, system_prompt) VALUES (?, ?)",
+      [key, prompt]
+    );
   }
 }
