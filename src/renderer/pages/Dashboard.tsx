@@ -54,6 +54,7 @@ export default function Dashboard() {
   ];
 
   const eventIcon: Record<string, string> = {
+    incoming: "📨",
     processed: "✅",
     delivered: "📤",
     skipped: "⏭️",
@@ -108,6 +109,9 @@ export default function Dashboard() {
                 <span>{eventIcon[ev.type] ?? "📋"}</span>
                 <span className="text-gray-400 shrink-0">{(ev as any)._time}</span>
                 <span className="text-gray-700">
+                  {ev.type === "incoming" && (
+                    <>Входящее сообщение ({ev.textLength} симв.)</>
+                  )}
                   {ev.type === "processed" && (
                     <>
                       <span className="font-medium">{ev.title}</span>

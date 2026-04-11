@@ -283,9 +283,20 @@ function startMessageListener() {
       if (!msg || !monitoredChatIds.has(msg.chat_id)) return;
 
       const text = extractText(msg);
-      if (!text || text.length < 50) return; // Pre-filter: too short
+      console.log(`[TDLib] New message in chat ${msg.chat_id}, msgId=${msg.id}, len=${text?.length ?? 0}`);
 
-      // Update last_processed_message_id
+      sendToRenderer("pipeline:event", {
+        type: "incoming",
+        chatId: msg.chat_id,
+        messageId: msg.id,
+        textLength: text?.length ?? 0,
+      });
+
+      if (!text || text.length < 50) {
+        console.log(`[TDLib] Skipped: too short`);
+        return;
+      }
+
       dbRun(
         `UPDATE monitored_chats
          SET last_processed_message_id = MAX(COALESCE(last_processed_message_id, 0), ?)
@@ -293,7 +304,6 @@ function startMessageListener() {
         [msg.id, msg.chat_id]
       );
 
-      // Process through AI pipeline
       processMessage({
         chatId: msg.chat_id,
         messageId: msg.id,

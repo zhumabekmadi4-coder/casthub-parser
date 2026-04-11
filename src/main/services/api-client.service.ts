@@ -155,7 +155,25 @@ async function deliveryLoop(): Promise<{ delivered: number; failed: number }> {
 
 let deliveryInterval: ReturnType<typeof setInterval> | null = null;
 
+function startDeliveryLoop() {
+  if (deliveryInterval) return;
+  deliveryInterval = setInterval(async () => {
+    try {
+      await deliveryLoop();
+    } catch (err) {
+      console.error("Delivery loop error:", err);
+    }
+  }, 30_000);
+  deliveryLoop().catch(console.error);
+}
+
 export function registerApiClientHandlers(): void {
+  // Auto-start delivery if auto_publish is enabled
+  const autoPublish = getSetting("auto_publish");
+  if (autoPublish === "true") {
+    startDeliveryLoop();
+  }
+
   // Manual delivery trigger
   ipcMain.handle("api:deliver-now", async () => {
     return await deliveryLoop();
@@ -182,16 +200,7 @@ export function registerApiClientHandlers(): void {
 
   // Start auto-delivery (every 30 seconds)
   ipcMain.handle("api:start-delivery", () => {
-    if (deliveryInterval) return { ok: true, already: true };
-    deliveryInterval = setInterval(async () => {
-      try {
-        await deliveryLoop();
-      } catch (err) {
-        console.error("Delivery loop error:", err);
-      }
-    }, 30_000);
-    // Also run immediately
-    deliveryLoop().catch(console.error);
+    startDeliveryLoop();
     return { ok: true };
   });
 
