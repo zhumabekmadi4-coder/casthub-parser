@@ -48,8 +48,15 @@ app.whenReady().then(async () => {
 
   // Restart handler
   ipcMain.handle("app:restart", () => {
-    app.relaunch();
-    app.exit(0);
+    if (process.env.ELECTRON_RENDERER_URL) {
+      // Dev mode — just reload the window
+      const win = BrowserWindow.getAllWindows()[0];
+      if (win) win.reload();
+    } else {
+      // Production — full relaunch
+      app.relaunch();
+      app.exit(0);
+    }
   });
 
   createWindow();
