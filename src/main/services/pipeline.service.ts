@@ -4,6 +4,7 @@ import { isDuplicate, markProcessed, externalIdHash, cleanOldEntries } from "./d
 import { OpenAIProvider } from "./ai/openai.provider";
 import type { AiProvider, ExtractedMeta } from "./ai/provider.interface";
 import { resolveCityName, resolveProfessionName, loadDictionaries, getProfessionsCache } from "./api-client.service";
+import { sanitizeText } from "./sanitize";
 
 let provider: AiProvider | null = null;
 
@@ -52,7 +53,10 @@ export interface MessagePayload {
 }
 
 export async function processMessage(msg: MessagePayload): Promise<void> {
-  const { chatId, messageId, text, date, senderUserId, forwardInfo } = msg;
+  const { chatId, messageId, date, senderUserId, forwardInfo } = msg;
+
+  // Sanitize text before any processing (AI, SQLite, queue)
+  const text = msg.text ? sanitizeText(msg.text) : null;
 
   if (!text || text.length < 50) return;
 
@@ -313,7 +317,7 @@ export function registerPipelineHandlers(): void {
     if (!item) return { ok: false, error: "Item not found" };
 
     const ai = getOrCreateProvider();
-    const text = item.raw_text;
+    const text = sanitizeText(item.raw_text);
 
     try {
       // Step 1: Relevance

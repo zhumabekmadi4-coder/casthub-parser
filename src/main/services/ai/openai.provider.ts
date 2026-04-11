@@ -16,28 +16,13 @@ export class OpenAIProvider implements AiProvider {
     this.model = model;
   }
 
-  // Sanitize user input to prevent prompt injection
-  private sanitize(text: string): string {
-    return text
-      // Remove common prompt injection patterns
-      .replace(/ignore\s+(all\s+)?(previous|above|prior)\s+(instructions?|prompts?|rules?)/gi, "[filtered]")
-      .replace(/disregard\s+(all\s+)?(previous|above|prior)/gi, "[filtered]")
-      .replace(/you\s+are\s+now\s+/gi, "[filtered]")
-      .replace(/new\s+instructions?:/gi, "[filtered]")
-      .replace(/system\s*prompt:/gi, "[filtered]")
-      .replace(/\bact\s+as\b/gi, "[filtered]")
-      .replace(/\brole\s*:\s*(system|assistant|user)\b/gi, "[filtered]")
-      // Remove attempts to close/open XML-style tags
-      .replace(/<\/?system>/gi, "[filtered]")
-      .replace(/<\/?instruction>/gi, "[filtered]");
-  }
-
   private async chat(systemPrompt: string, userMessage: string, jsonMode = false): Promise<string> {
+    // Text is already sanitized by sanitize.ts before reaching the provider
     const response = await this.client.chat.completions.create({
       model: this.model,
       messages: [
         { role: "system", content: systemPrompt },
-        { role: "user", content: this.sanitize(userMessage) },
+        { role: "user", content: userMessage },
       ],
       temperature: 0.1,
       max_tokens: 2000,
