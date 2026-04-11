@@ -25,6 +25,7 @@ export interface ExtractedVacancy {
   payment?: string;
   schedule?: string;
   requirements?: string;
+  description?: string;
 }
 
 export interface AiProvider {

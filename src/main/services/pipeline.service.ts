@@ -3,7 +3,7 @@ import { dbGet, dbRun } from "../db/sqlite";
 import { isDuplicate, markProcessed, externalIdHash, cleanOldEntries } from "./dedup.service";
 import { OpenAIProvider } from "./ai/openai.provider";
 import type { AiProvider, ExtractedMeta } from "./ai/provider.interface";
-import { resolveCityName, resolveProfessionName, loadDictionaries } from "./api-client.service";
+import { resolveCityName, resolveProfessionName, loadDictionaries, getProfessionsCache } from "./api-client.service";
 
 let provider: AiProvider | null = null;
 
@@ -168,22 +168,26 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
   const roles: any[] = [];
   const vacancies: any[] = [];
 
+  // Load professions list for technical vacancies
+  let vacancyPrompt = getPrompt("extract_vacancy");
+  if (classification === "technical") {
+    await loadDictionaries();
+    const profCache = getProfessionsCache();
+    const profList = profCache ? profCache.map((p: any) => p.nameRu).join(", ") : "";
+    vacancyPrompt = vacancyPrompt.replace("{professionsList}", profList);
+  }
+
   for (const name of itemNames) {
     try {
       if (classification === "casting") {
         const role = await ai.extractRole(text, name, getPrompt("extract_role"));
         roles.push(role);
       } else {
-        const vacancy = await ai.extractVacancy(
-          text,
-          name,
-          getPrompt("extract_vacancy")
-        );
+        const vacancy = await ai.extractVacancy(text, name, vacancyPrompt);
         vacancies.push(vacancy);
       }
     } catch (err) {
       console.error(`Failed to extract ${name}:`, err);
-      // Continue with other items
     }
   }
 
@@ -327,13 +331,21 @@ export function registerPipelineHandlers(): void {
       if (!itemNames.length) itemNames = [classification === "casting" ? "Роль" : "Вакансия"];
 
       // Step 4: Extract each
+      let reprocessVacancyPrompt = getPrompt("extract_vacancy");
+      if (classification === "technical") {
+        await loadDictionaries();
+        const profCache = getProfessionsCache();
+        const profList = profCache ? profCache.map((p: any) => p.nameRu).join(", ") : "";
+        reprocessVacancyPrompt = reprocessVacancyPrompt.replace("{professionsList}", profList);
+      }
+
       const roles: any[] = [];
       const vacancies: any[] = [];
       for (const name of itemNames) {
         if (classification === "casting") {
           roles.push(await ai.extractRole(text, name, getPrompt("extract_role")));
         } else {
-          vacancies.push(await ai.extractVacancy(text, name, getPrompt("extract_vacancy")));
+          vacancies.push(await ai.extractVacancy(text, name, reprocessVacancyPrompt));
         }
       }
 

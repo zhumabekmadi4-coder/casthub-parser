@@ -218,12 +218,21 @@ Only return valid JSON.`,
       "extract_vacancy",
       `Extract details for the job position "{vacancyName}" from this announcement. Return JSON:
 {
-  "professionName": "profession name in Russian",
+  "professionName": "profession from the list below",
   "payment": "payment info or Договорная if not specified",
-  "schedule": "schedule info or empty string if not specified",
-  "requirements": "requirements or empty string if not specified"
+  "schedule": "schedule/dates or empty string",
+  "requirements": "empty string (put everything in description)",
+  "description": "all details: experience, equipment, skills, conditions, etc."
 }
-Never return null for any field. Use empty string "" if information is not found. For payment use "Договорная" if not specified.
+
+CRITICAL RULES:
+1. PROFESSION — choose the closest match from this list: {professionsList}
+   If no exact match, pick the most similar one. Do NOT invent new names.
+2. PAYMENT — use the exact amount if mentioned for THIS vacancy. If not specified, write "Договорная".
+3. DESCRIPTION — put ALL details here: required experience, equipment (own/provided), software skills, conditions, etc. Never return empty if there are any details in the text.
+4. SCHEDULE — only dates/time of work. If not specified, use empty string.
+5. REQUIREMENTS — always empty string (we use description instead).
+Never return null for any field.
 Only return valid JSON.`,
     ],
   ];
