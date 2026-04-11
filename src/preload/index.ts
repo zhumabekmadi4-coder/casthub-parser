@@ -54,6 +54,7 @@ const api = {
   // Pipeline
   pipeline: {
     process: (msg: any) => ipcRenderer.invoke("pipeline:process", msg),
+    reprocess: (id: number) => ipcRenderer.invoke("pipeline:reprocess", id),
     resetProvider: () => ipcRenderer.invoke("pipeline:reset-provider"),
     cleanDedup: () => ipcRenderer.invoke("pipeline:clean-dedup"),
   },

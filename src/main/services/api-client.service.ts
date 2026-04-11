@@ -6,6 +6,62 @@ function getSetting(key: string): string {
   return row?.value ?? "";
 }
 
+// Cached dictionaries from CastHub
+let citiesCache: { id: string; nameRu: string }[] | null = null;
+let professionsCache: { id: string; nameRu: string }[] | null = null;
+
+async function fetchCities(): Promise<{ id: string; nameRu: string }[]> {
+  if (citiesCache) return citiesCache;
+  const apiUrl = getSetting("casthub_api_url");
+  try {
+    const res = await fetch(`${apiUrl}/api/cities`);
+    if (res.ok) {
+      citiesCache = await res.json();
+      return citiesCache!;
+    }
+  } catch {}
+  return [];
+}
+
+async function fetchProfessions(): Promise<{ id: string; nameRu: string }[]> {
+  if (professionsCache) return professionsCache;
+  const apiUrl = getSetting("casthub_api_url");
+  try {
+    const res = await fetch(`${apiUrl}/api/professions`);
+    if (res.ok) {
+      professionsCache = await res.json();
+      return professionsCache!;
+    }
+  } catch {}
+  return [];
+}
+
+export function resolveCityName(name: string): string | null {
+  if (!citiesCache) return null;
+  const lower = name.toLowerCase().trim();
+  const found = citiesCache.find((c) => c.nameRu.toLowerCase() === lower);
+  return found?.id ?? null;
+}
+
+export function resolveProfessionName(name: string): string | null {
+  if (!professionsCache) return null;
+  const lower = name.toLowerCase().trim();
+  const found = professionsCache.find((p) => p.nameRu.toLowerCase() === lower);
+  return found?.id ?? null;
+}
+
+export async function loadDictionaries(): Promise<void> {
+  await Promise.all([fetchCities(), fetchProfessions()]);
+}
+
+export function getCitiesCache() {
+  return citiesCache;
+}
+
+export function getProfessionsCache() {
+  return professionsCache;
+}
+
 function sendToRenderer(channel: string, ...args: any[]) {
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send(channel, ...args);

@@ -3,6 +3,7 @@ import { dbGet, dbRun } from "../db/sqlite";
 import { isDuplicate, markProcessed, externalIdHash, cleanOldEntries } from "./dedup.service";
 import { OpenAIProvider } from "./ai/openai.provider";
 import type { AiProvider, ExtractedMeta } from "./ai/provider.interface";
+import { resolveCityName, resolveProfessionName, loadDictionaries } from "./api-client.service";
 
 let provider: AiProvider | null = null;
 
@@ -200,13 +201,34 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
     expiresAt = d.toISOString();
   }
 
+  // Resolve cities to IDs
+  await loadDictionaries();
+  let cityId: string | undefined;
+  let cityIds: string[] | undefined;
+
+  if (meta.cities.length === 1) {
+    cityId = resolveCityName(meta.cities[0]) || undefined;
+  } else if (meta.cities.length > 1) {
+    const resolved = meta.cities.map(resolveCityName).filter((id): id is string => !!id);
+    if (resolved.length > 0) cityIds = resolved;
+  }
+
+  // Resolve profession IDs for vacancies
+  if (classification === "technical" && vacancies.length > 0) {
+    for (const v of vacancies) {
+      const profId = resolveProfessionName(v.professionName);
+      if (profId) v.professionId = profId;
+    }
+  }
+
   const parsedData = {
     externalId: externalIdHash(chatId, messageId),
     title: meta.title,
     description: meta.cleanedText.substring(0, 2000),
     type: classification,
     city: meta.cities[0] || undefined,
-    cities: meta.cities.length > 1 ? meta.cities : undefined,
+    cityId,
+    cityIds,
     whatsapp: meta.contacts.whatsapp || undefined,
     telegram: meta.contacts.telegram || undefined,
     phone: meta.contacts.phone || undefined,
@@ -279,6 +301,92 @@ export function registerPipelineHandlers(): void {
   ipcMain.handle("pipeline:reset-provider", () => {
     resetProvider();
     return true;
+  });
+
+  // Reprocess a queue item — re-run AI on the raw text
+  ipcMain.handle("pipeline:reprocess", async (_e, id: number) => {
+    const item = dbGet("SELECT * FROM import_queue WHERE id = ?", [id]);
+    if (!item) return { ok: false, error: "Item not found" };
+
+    const ai = getOrCreateProvider();
+    const text = item.raw_text;
+
+    try {
+      // Step 1: Relevance
+      const classification = await ai.checkRelevance(text, getPrompt("relevance_check"));
+      if (classification === "skip") {
+        dbRun("UPDATE import_queue SET status = 'review', error = 'AI classified as irrelevant', parsed_data = '{}' WHERE id = ?", [id]);
+        return { ok: true, status: "irrelevant" };
+      }
+
+      // Step 2: Meta
+      const meta = await ai.extractMeta(text, classification, getPrompt("extract_meta"));
+
+      // Step 3: Count items
+      let itemNames = await ai.countItems(meta.cleanedText, classification, getPrompt("count_items"));
+      if (!itemNames.length) itemNames = [classification === "casting" ? "Роль" : "Вакансия"];
+
+      // Step 4: Extract each
+      const roles: any[] = [];
+      const vacancies: any[] = [];
+      for (const name of itemNames) {
+        if (classification === "casting") {
+          roles.push(await ai.extractRole(text, name, getPrompt("extract_role")));
+        } else {
+          vacancies.push(await ai.extractVacancy(text, name, getPrompt("extract_vacancy")));
+        }
+      }
+
+      // Step 5: Assembly
+      const defaultDays = parseInt(getSetting("default_expiration_days") || "3");
+      let expiresAt = meta.expiresAt;
+      if (!expiresAt) {
+        expiresAt = new Date(Date.now() + defaultDays * 86400000).toISOString();
+      }
+
+      await loadDictionaries();
+      let cityId: string | undefined;
+      let cityIds: string[] | undefined;
+      if (meta.cities.length === 1) {
+        cityId = resolveCityName(meta.cities[0]) || undefined;
+      } else if (meta.cities.length > 1) {
+        const resolved = meta.cities.map(resolveCityName).filter((x): x is string => !!x);
+        if (resolved.length > 0) cityIds = resolved;
+      }
+
+      if (classification === "technical") {
+        for (const v of vacancies) {
+          const profId = resolveProfessionName(v.professionName);
+          if (profId) v.professionId = profId;
+        }
+      }
+
+      const parsedData = {
+        externalId: item.content_hash,
+        title: meta.title,
+        description: meta.cleanedText.substring(0, 2000),
+        type: classification,
+        city: meta.cities[0] || undefined,
+        cityId,
+        cityIds,
+        whatsapp: meta.contacts.whatsapp || undefined,
+        telegram: meta.contacts.telegram || undefined,
+        phone: meta.contacts.phone || undefined,
+        expiresAt,
+        roles: classification === "casting" ? roles : undefined,
+        vacancies: classification === "technical" ? vacancies : undefined,
+      };
+
+      dbRun(
+        "UPDATE import_queue SET parsed_data = ?, status = 'review', error = NULL WHERE id = ?",
+        [JSON.stringify(parsedData), id]
+      );
+
+      return { ok: true, status: "reprocessed" };
+    } catch (err) {
+      dbRun("UPDATE import_queue SET error = ? WHERE id = ?", [String(err), id]);
+      return { ok: false, error: String(err) };
+    }
   });
 
   // Clean old dedup entries

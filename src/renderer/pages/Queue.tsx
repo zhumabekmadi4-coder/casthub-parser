@@ -47,6 +47,15 @@ export default function Queue() {
     load();
   };
 
+  const handleReprocess = async (id: number) => {
+    const result = await window.api.pipeline.reprocess(id);
+    if (result.ok) {
+      load();
+    } else {
+      alert(`Ошибка перепроверки: ${result.error}`);
+    }
+  };
+
   return (
     <div className="p-6">
       <h2 className="text-xl font-bold mb-4">Очередь</h2>
@@ -149,6 +158,12 @@ export default function Queue() {
                           Одобрить
                         </button>
                       )}
+                      <button
+                        onClick={() => handleReprocess(item.id)}
+                        className="rounded bg-purple-600 px-3 py-1.5 text-xs text-white hover:bg-purple-700"
+                      >
+                        Перепроверить
+                      </button>
                       {item.status === "review" && (
                         <button
                           onClick={() => handleReject(item.id)}
