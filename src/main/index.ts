@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
 import * as path from "path";
 import { initDb } from "./db/sqlite";
 import { registerSettingsHandlers } from "./services/settings.service";
@@ -45,6 +45,12 @@ app.whenReady().then(async () => {
   } catch (err) {
     console.error("Init error (non-fatal):", err);
   }
+
+  // Restart handler
+  ipcMain.handle("app:restart", () => {
+    app.relaunch();
+    app.exit(0);
+  });
 
   createWindow();
 

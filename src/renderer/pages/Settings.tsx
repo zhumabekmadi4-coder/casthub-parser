@@ -9,20 +9,54 @@ interface Prompt {
 
 export default function Settings() {
   const [settings, setSettings] = useState<Record<string, string>>({});
+  const [draft, setDraft] = useState<Record<string, string>>({});
   const [prompts, setPrompts] = useState<Prompt[]>([]);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState<string | null>(null);
 
   useEffect(() => {
-    window.api.settings.getAll().then(setSettings);
+    window.api.settings.getAll().then((s) => {
+      setSettings(s);
+      setDraft(s);
+    });
     window.api.prompts.getAll().then(setPrompts);
   }, []);
 
-  const updateSetting = async (key: string, value: string) => {
-    setSettings((prev) => ({ ...prev, [key]: value }));
-    await window.api.settings.set(key, value);
+  const updateDraft = (key: string, value: string) => {
+    setDraft((prev) => ({ ...prev, [key]: value }));
+    setDirty(true);
+    setSaved(false);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    for (const [key, value] of Object.entries(draft)) {
+      if (value !== settings[key]) {
+        await window.api.settings.set(key, value);
+      }
+    }
+    // Reset AI provider if it changed
+    if (
+      draft.ai_provider !== settings.ai_provider ||
+      draft.ai_api_key !== settings.ai_api_key ||
+      draft.ai_model !== settings.ai_model
+    ) {
+      await window.api.pipeline.resetProvider();
+    }
+    setSettings({ ...draft });
+    setDirty(false);
+    setSaving(false);
     setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    setTimeout(() => setSaved(false), 3000);
+  };
+
+  const handleRestart = async () => {
+    if (dirty) {
+      await handleSave();
+    }
+    window.api.app.restart();
   };
 
   const updatePrompt = async (key: string, systemPrompt: string) => {
@@ -34,7 +68,7 @@ export default function Settings() {
     );
     setEditingPrompt(null);
     setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    setTimeout(() => setSaved(false), 3000);
   };
 
   const promptLabels: Record<string, string> = {
@@ -49,12 +83,37 @@ export default function Settings() {
     <div className="p-6 max-w-3xl">
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-bold">Настройки</h2>
-        {saved && (
-          <span className="text-xs text-green-600 bg-green-50 px-2 py-1 rounded">
-            Сохранено
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {saved && (
+            <span className="text-xs text-green-600 bg-green-50 px-2 py-1 rounded">
+              Сохранено
+            </span>
+          )}
+          <button
+            onClick={handleSave}
+            disabled={!dirty || saving}
+            className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+              dirty
+                ? "bg-blue-600 text-white hover:bg-blue-700"
+                : "bg-gray-100 text-gray-400 cursor-not-allowed"
+            }`}
+          >
+            {saving ? "Сохранение..." : "Сохранить"}
+          </button>
+          <button
+            onClick={handleRestart}
+            className="rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
+          >
+            Перезапустить
+          </button>
+        </div>
       </div>
+
+      {dirty && (
+        <div className="mb-4 rounded-lg bg-yellow-50 border border-yellow-200 px-3 py-2 text-xs text-yellow-700">
+          Есть несохранённые изменения
+        </div>
+      )}
 
       {/* CastHub API */}
       <section className="mb-8">
@@ -64,14 +123,14 @@ export default function Settings() {
         <div className="space-y-3">
           <Field
             label="URL"
-            value={settings.casthub_api_url ?? ""}
-            onChange={(v) => updateSetting("casthub_api_url", v)}
+            value={draft.casthub_api_url ?? ""}
+            onChange={(v) => updateDraft("casthub_api_url", v)}
             placeholder="https://app.casthub.kz"
           />
           <Field
             label="API ключ"
-            value={settings.casthub_api_key ?? ""}
-            onChange={(v) => updateSetting("casthub_api_key", v)}
+            value={draft.casthub_api_key ?? ""}
+            onChange={(v) => updateDraft("casthub_api_key", v)}
             placeholder="Bearer token"
             type="password"
           />
@@ -87,8 +146,8 @@ export default function Settings() {
           <div>
             <label className="block text-xs text-gray-500 mb-1">Провайдер</label>
             <select
-              value={settings.ai_provider ?? "openai"}
-              onChange={(e) => updateSetting("ai_provider", e.target.value)}
+              value={draft.ai_provider ?? "openai"}
+              onChange={(e) => updateDraft("ai_provider", e.target.value)}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
             >
               <option value="openai">OpenAI</option>
@@ -98,15 +157,15 @@ export default function Settings() {
           </div>
           <Field
             label="API ключ"
-            value={settings.ai_api_key ?? ""}
-            onChange={(v) => updateSetting("ai_api_key", v)}
+            value={draft.ai_api_key ?? ""}
+            onChange={(v) => updateDraft("ai_api_key", v)}
             placeholder="sk-..."
             type="password"
           />
           <Field
             label="Модель"
-            value={settings.ai_model ?? ""}
-            onChange={(v) => updateSetting("ai_model", v)}
+            value={draft.ai_model ?? ""}
+            onChange={(v) => updateDraft("ai_model", v)}
             placeholder="gpt-4o-mini"
           />
         </div>
@@ -127,32 +186,32 @@ export default function Settings() {
             </div>
             <button
               onClick={() =>
-                updateSetting(
+                updateDraft(
                   "auto_publish",
-                  settings.auto_publish === "true" ? "false" : "true"
+                  draft.auto_publish === "true" ? "false" : "true"
                 )
               }
               className={`relative h-6 w-11 rounded-full transition-colors ${
-                settings.auto_publish === "true" ? "bg-blue-600" : "bg-gray-300"
+                draft.auto_publish === "true" ? "bg-blue-600" : "bg-gray-300"
               }`}
             >
               <span
                 className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white transition-transform shadow ${
-                  settings.auto_publish === "true" ? "translate-x-5" : ""
+                  draft.auto_publish === "true" ? "translate-x-5" : ""
                 }`}
               />
             </button>
           </div>
           <Field
             label="Срок действия по умолчанию (дни)"
-            value={settings.default_expiration_days ?? "3"}
-            onChange={(v) => updateSetting("default_expiration_days", v)}
+            value={draft.default_expiration_days ?? "3"}
+            onChange={(v) => updateDraft("default_expiration_days", v)}
             type="number"
           />
           <Field
             label="Кеш дедупликации (дни)"
-            value={settings.dedup_cache_days ?? "7"}
-            onChange={(v) => updateSetting("dedup_cache_days", v)}
+            value={draft.dedup_cache_days ?? "7"}
+            onChange={(v) => updateDraft("dedup_cache_days", v)}
             type="number"
           />
         </div>
@@ -206,7 +265,7 @@ export default function Settings() {
                     }
                     className="mt-2 rounded bg-blue-600 px-3 py-1.5 text-xs text-white hover:bg-blue-700"
                   >
-                    Сохранить
+                    Сохранить промпт
                   </button>
                 </div>
               )}

@@ -66,6 +66,11 @@ const api = {
     stopDelivery: () => ipcRenderer.invoke("api:stop-delivery"),
   },
 
+  // App
+  app: {
+    restart: () => ipcRenderer.invoke("app:restart"),
+  },
+
   // Events from main process
   on: (channel: string, callback: (...args: any[]) => void) => {
     const subscription = (_event: any, ...args: any[]) => callback(...args);
