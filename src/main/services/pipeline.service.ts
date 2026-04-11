@@ -101,6 +101,7 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
       reason: "irrelevant",
       chatId,
       messageId,
+      preview: text.substring(0, 80),
     });
     return;
   }

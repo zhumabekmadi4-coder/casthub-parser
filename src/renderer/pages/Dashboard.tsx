@@ -125,7 +125,10 @@ export default function Dashboard() {
                     <>Доставлено: <span className="font-medium">{ev.title}</span></>
                   )}
                   {ev.type === "skipped" && (
-                    <>Пропущено: {ev.reason === "duplicate" ? "дубликат" : ev.reason === "irrelevant" ? "нерелевантно" : ev.reason === "no_contacts" ? "нет контактов" : ev.reason}</>
+                    <>
+                      Пропущено: {ev.reason === "duplicate" ? "дубликат" : ev.reason === "irrelevant" ? "нерелевантно" : ev.reason === "no_contacts" ? "нет контактов" : ev.reason}
+                      {ev.preview && <span className="text-gray-400 ml-1">«{ev.preview}»</span>}
+                    </>
                   )}
                   {ev.type === "error" && (
                     <span className="text-red-600">{ev.error}</span>

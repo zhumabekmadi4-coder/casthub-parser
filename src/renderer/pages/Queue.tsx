@@ -56,9 +56,25 @@ export default function Queue() {
     }
   };
 
+  // Auto-refresh when new items arrive
+  useEffect(() => {
+    const unsub = window.api.on("pipeline:event", () => {
+      load();
+    });
+    return unsub;
+  }, [filter]);
+
   return (
     <div className="p-6">
-      <h2 className="text-xl font-bold mb-4">Очередь</h2>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-xl font-bold">Очередь</h2>
+        <button
+          onClick={load}
+          className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50"
+        >
+          Обновить
+        </button>
+      </div>
 
       {/* Filter tabs */}
       <div className="flex gap-1 mb-4 text-xs">
