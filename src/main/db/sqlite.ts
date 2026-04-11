@@ -169,10 +169,18 @@ Reply with ONLY one word: casting, technical, or skip.`,
 {
   "contacts": { "telegram": "@handle or null", "whatsapp": "+phone or null", "phone": "+phone or null" },
   "cities": ["city names in Russian"],
-  "expiresAt": "YYYY-MM-DD or null (if specific date mentioned)",
-  "cleanedText": "original text with contacts/links removed",
+  "expiresAt": "YYYY-MM-DD or null",
+  "cleanedText": "original text with contacts/links/phone numbers removed",
   "title": "short descriptive title in Russian"
 }
+
+IMPORTANT rules for expiresAt:
+- If shooting/event dates are mentioned (e.g. "28-29 апреля и 1 мая"), use the LAST date ("2026-05-01")
+- If a deadline is mentioned (e.g. "до 15 апреля"), use that date
+- If relative time is used (e.g. "завтра", "в эту субботу"), resolve to an absolute date based on today's date provided in the Type line
+- If no dates at all — set null (the system will add default expiration)
+- Always use the year from the current context
+
 Only return valid JSON, nothing else.`,
     ],
     [
@@ -193,7 +201,16 @@ Only return the JSON array, nothing else.`,
   "description": "role description or null",
   "payment": "payment info or null"
 }
-IMPORTANT: gender is REQUIRED. Infer from context if not explicit (e.g. "жена"=female, "сын"=male, "официант"=any).
+
+CRITICAL RULES:
+1. GENDER is REQUIRED. Infer from context: "девушка/жена/мама"=female, "парень/сын/муж"=male, "официант"=any.
+2. TYPE — determine from the announcement structure:
+   - "lead" ONLY if explicitly labeled as "главная роль" or "main role"
+   - "episodic" for "второстепенная роль", supporting roles, or roles not marked as main
+   - "background" for "массовка", "эпизод без слов", crowd scenes
+3. AGE — use the EXACT numbers written for THIS specific role. Do NOT copy age from other roles.
+4. PAYMENT — set ONLY if payment is explicitly mentioned for THIS specific role. If payment is mentioned for a different role or generally, set null for this role.
+
 Only return valid JSON.`,
     ],
     [
@@ -209,9 +226,10 @@ Only return valid JSON.`,
     ],
   ];
 
+  // Use INSERT OR REPLACE to update prompts on schema changes
   for (const [key, prompt] of defaultPrompts) {
     db.run(
-      "INSERT OR IGNORE INTO prompts (key, system_prompt) VALUES (?, ?)",
+      "INSERT OR REPLACE INTO prompts (key, system_prompt, updated_at) VALUES (?, ?, datetime('now'))",
       [key, prompt]
     );
   }
