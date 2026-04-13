@@ -1,13 +1,65 @@
 {
   "name": "casthub-parser",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Telegram parser for CastHub.kz — collects casting/job announcements",
   "main": "dist/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "package": "electron-builder"
+    "package": "npm run build && electron-builder",
+    "package:win": "npm run build && electron-builder --win"
+  },
+  "build": {
+    "appId": "kz.casthub.parser",
+    "productName": "CastHub Parser",
+    "npmRebuild": false,
+    "directories": {
+      "output": "release",
+      "buildResources": "resources"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json",
+      "!**/node_modules/**/{CHANGELOG.md,README.md,readme.md,*.d.ts.map,*.js.map}",
+      "!**/node_modules/**/{test,tests,__tests__,docs,examples}"
+    ],
+    "asarUnpack": [
+      "**/node_modules/@prebuilt-tdlib/**",
+      "**/node_modules/prebuilt-tdlib/**",
+      "**/node_modules/sql.js/dist/sql-wasm.wasm",
+      "**/node_modules/sql.js/dist/sql-wasm.js"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signAndEditExecutable": false,
+      "artifactName": "CastHub-Parser-${version}-win-${arch}.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "zhumabekmadi4-coder",
+        "repo": "casthub-parser",
+        "private": true,
+        "releaseType": "release"
+      }
+    ],
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "CastHub Parser",
+      "runAfterFinish": true
+    }
   },
   "keywords": [],
   "author": "Antigravity",

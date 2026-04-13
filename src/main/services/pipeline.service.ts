@@ -1,14 +1,27 @@
 import { ipcMain, BrowserWindow } from "electron";
 import { dbGet, dbRun } from "../db/sqlite";
 import { isDuplicate, markProcessed, externalIdHash, cleanOldEntries } from "./dedup.service";
-import { OpenAIProvider } from "./ai/openai.provider";
-import type { AiProvider, ExtractedMeta } from "./ai/provider.interface";
-import { resolveCityName, resolveProfessionName, loadDictionaries, getProfessionsCache } from "./api-client.service";
+import { OpenAIProvider, type StepConfig } from "./ai/openai.provider";
+import type { AiProvider, ExtractedMeta, ExtractedRole, StepKey } from "./ai/provider.interface";
+import {
+  resolveCityName,
+  resolveProfessionName,
+  resolveAppearanceType,
+  resolveBodyType,
+  resolveHairColor,
+  resolveHairType,
+  resolveEyeColor,
+  resolveFaceType,
+  resolveActingEducation,
+  resolveLanguage,
+  loadDictionaries,
+  getDictionaries,
+  getProfessionsCache,
+} from "./api-client.service";
 import { sanitizeText } from "./sanitize";
 
 let provider: AiProvider | null = null;
 
-// In-memory log buffer (last 500 events)
 const eventLog: any[] = [];
 const MAX_LOG_SIZE = 500;
 
@@ -35,21 +48,28 @@ function getSetting(key: string): string {
   return row?.value ?? "";
 }
 
+function resolveStepConfig(step: StepKey): StepConfig {
+  const model = getSetting(`ai_model_${step}`);
+  const tempRaw = getSetting(`ai_temp_${step}`);
+  const temperature = tempRaw ? parseFloat(tempRaw) : undefined;
+  return {
+    model: model || undefined,
+    temperature: Number.isFinite(temperature as number) ? temperature : undefined,
+  };
+}
+
 function getOrCreateProvider(): AiProvider {
   if (provider) return provider;
 
-  const providerName = getSetting("ai_provider");
   const apiKey = getSetting("ai_api_key");
   const model = getSetting("ai_model");
 
   if (!apiKey) throw new Error("AI API key not configured");
 
-  // For now only OpenAI, extensible later
-  provider = new OpenAIProvider(apiKey, model || "gpt-4o-mini");
+  provider = new OpenAIProvider(apiKey, model || "gpt-4o-mini", resolveStepConfig);
   return provider;
 }
 
-// Reset provider when settings change
 export function resetProvider() {
   provider = null;
 }
@@ -57,28 +77,61 @@ export function resetProvider() {
 export interface MessagePayload {
   chatId: number;
   messageId: number;
+  threadId?: number | null;
   text: string;
   date: number;
   senderUserId: number | null;
   forwardInfo: any;
 }
 
+// Build the role prompt by injecting all reference list snippets
+function buildRolePrompt(): string {
+  const dict = getDictionaries();
+  const base = getPrompt("extract_role");
+  const list = (arr: any[] | undefined, field: "code" | "nameRu") =>
+    arr?.length ? arr.map((x) => x[field]).join(", ") : "(unavailable)";
+
+  return base
+    .replace("{languagesList}", list(dict?.languages, "code"))
+    .replace("{appearanceTypesList}", list(dict?.appearanceTypes, "code"))
+    .replace("{bodyTypesList}", list(dict?.bodyTypes, "code"))
+    .replace("{hairColorsList}", list(dict?.hairColors, "code"))
+    .replace("{hairTypesList}", list(dict?.hairTypes, "code"))
+    .replace("{eyeColorsList}", list(dict?.eyeColors, "code"))
+    .replace("{faceTypesList}", list(dict?.faceTypes, "code"))
+    .replace("{actingEducationList}", list(dict?.actingEducation, "code"));
+}
+
+// Resolve role's reference codes → UUIDs, drop fields where dictionary is missing
+function enrichRole(role: ExtractedRole): any {
+  return {
+    ...role,
+    appearanceTypeId: role.appearanceType ? resolveAppearanceType(role.appearanceType) : null,
+    bodyTypeId: role.bodyType ? resolveBodyType(role.bodyType) : null,
+    hairColorId: role.hairColor ? resolveHairColor(role.hairColor) : null,
+    hairTypeId: role.hairType ? resolveHairType(role.hairType) : null,
+    eyeColorId: role.eyeColor ? resolveEyeColor(role.eyeColor) : null,
+    faceTypeId: role.faceType ? resolveFaceType(role.faceType) : null,
+    actingEducationId: role.actingEducation ? resolveActingEducation(role.actingEducation) : null,
+    languageIds: role.languages?.length
+      ? role.languages.map((c) => resolveLanguage(c)).filter((id): id is string => !!id)
+      : undefined,
+  };
+}
+
 export async function processMessage(msg: MessagePayload): Promise<void> {
   const { chatId, messageId, date, senderUserId, forwardInfo } = msg;
 
-  // Sanitize text before any processing (AI, SQLite, queue)
   const text = msg.text ? sanitizeText(msg.text) : null;
 
   if (!text || text.length < 20) return;
 
-  // Build forward origin key
   const forwardOrigin = forwardInfo?.origin
     ? `${forwardInfo.origin.chat_id || ""}:${forwardInfo.origin.message_id || ""}`
     : null;
 
-  // Dedup check
   if (isDuplicate(chatId, messageId, text, forwardOrigin)) {
-    logEvent( {
+    logEvent({
       type: "skipped",
       reason: "duplicate",
       chatId,
@@ -89,13 +142,12 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
 
   const ai = getOrCreateProvider();
 
-  // Step 1: Relevance check
   let classification: "casting" | "technical" | "skip";
   try {
     classification = await ai.checkRelevance(text, getPrompt("relevance_check"));
   } catch (err) {
     markProcessed(chatId, messageId, text, "error", forwardOrigin);
-    logEvent( {
+    logEvent({
       type: "error",
       step: "relevance",
       error: String(err),
@@ -107,7 +159,7 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
 
   if (classification === "skip") {
     markProcessed(chatId, messageId, text, "skip", forwardOrigin);
-    logEvent( {
+    logEvent({
       type: "skipped",
       reason: "irrelevant",
       chatId,
@@ -117,7 +169,6 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
     return;
   }
 
-  // Step 2: Extract meta (contacts, cities, dates)
   let meta: ExtractedMeta;
   try {
     meta = await ai.extractMeta(text, classification, getPrompt("extract_meta"));
@@ -127,14 +178,11 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
     return;
   }
 
-  // Check contacts — if none, try TDLib username lookup
   const hasContact =
     meta.contacts.telegram || meta.contacts.whatsapp || meta.contacts.phone;
 
   if (!hasContact && senderUserId) {
     try {
-      const { ipcMain } = require("electron");
-      // Use tdlib service to get username
       const tdlib = require("./tdlib.service");
       const client = tdlib.getClient();
       if (client) {
@@ -148,12 +196,11 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
     }
   }
 
-  // If still no contacts — ignore this announcement
   const finalHasContact =
     meta.contacts.telegram || meta.contacts.whatsapp || meta.contacts.phone;
   if (!finalHasContact) {
     markProcessed(chatId, messageId, text, classification, forwardOrigin);
-    logEvent( {
+    logEvent({
       type: "skipped",
       reason: "no_contacts",
       chatId,
@@ -162,7 +209,8 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
     return;
   }
 
-  // Step 3: Count roles/vacancies
+  await loadDictionaries();
+
   let itemNames: string[];
   try {
     itemNames = await ai.countItems(
@@ -180,24 +228,23 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
     itemNames = [classification === "casting" ? "Роль" : "Вакансия"];
   }
 
-  // Step 4: Extract each role/vacancy separately
   const roles: any[] = [];
   const vacancies: any[] = [];
 
-  // Load professions list for technical vacancies
   let vacancyPrompt = getPrompt("extract_vacancy");
   if (classification === "technical") {
-    await loadDictionaries();
     const profCache = getProfessionsCache();
     const profList = profCache ? profCache.map((p: any) => p.nameRu).join(", ") : "";
     vacancyPrompt = vacancyPrompt.replace("{professionsList}", profList);
   }
 
+  const rolePrompt = classification === "casting" ? buildRolePrompt() : "";
+
   for (const name of itemNames) {
     try {
       if (classification === "casting") {
-        const role = await ai.extractRole(text, name, getPrompt("extract_role"));
-        roles.push(role);
+        const role = await ai.extractRole(text, name, rolePrompt);
+        roles.push(enrichRole(role));
       } else {
         const vacancy = await ai.extractVacancy(text, name, vacancyPrompt);
         vacancies.push(vacancy);
@@ -213,7 +260,6 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
     return;
   }
 
-  // Step 5: Assembly
   const defaultDays = parseInt(getSetting("default_expiration_days") || "3");
   let expiresAt = meta.expiresAt;
   if (!expiresAt) {
@@ -221,8 +267,6 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
     expiresAt = d.toISOString();
   }
 
-  // Resolve cities to IDs
-  await loadDictionaries();
   let cityId: string | undefined;
   let cityIds: string[] | undefined;
 
@@ -233,7 +277,6 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
     if (resolved.length > 0) cityIds = resolved;
   }
 
-  // Resolve profession IDs for vacancies
   if (classification === "technical" && vacancies.length > 0) {
     for (const v of vacancies) {
       const profId = resolveProfessionName(v.professionName);
@@ -249,6 +292,7 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
     city: meta.cities[0] || undefined,
     cityId,
     cityIds,
+    cities: meta.cities.length ? meta.cities : undefined,
     whatsapp: meta.contacts.whatsapp || undefined,
     telegram: meta.contacts.telegram || undefined,
     phone: meta.contacts.phone || undefined,
@@ -258,22 +302,22 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
     vacancies: classification === "technical" ? vacancies : undefined,
   };
 
-  // Add to queue
   const autoPublish = getSetting("auto_publish") === "true";
 
   dbRun(
     `INSERT INTO import_queue (content_hash, raw_text, parsed_data, status)
      VALUES (?, ?, ?, ?)`,
     [
-    externalIdHash(chatId, messageId),
-    text,
-    JSON.stringify(parsedData),
-    autoPublish ? "pending" : "review",
-  ]);
+      externalIdHash(chatId, messageId),
+      text,
+      JSON.stringify(parsedData),
+      autoPublish ? "pending" : "review",
+    ]
+  );
 
   markProcessed(chatId, messageId, text, classification, forwardOrigin);
 
-  logEvent( {
+  logEvent({
     type: "processed",
     classification,
     title: meta.title,
@@ -298,7 +342,7 @@ function enqueueFailed(
     [externalIdHash(chatId, messageId), text, "{}", status, error]
   );
 
-  logEvent( {
+  logEvent({
     type: "error",
     error,
     chatId,
@@ -307,18 +351,15 @@ function enqueueFailed(
 }
 
 export function registerPipelineHandlers(): void {
-  // Get stored event log
   ipcMain.handle("pipeline:get-logs", () => {
     return eventLog;
   });
 
-  // Clear event log
   ipcMain.handle("pipeline:clear-logs", () => {
     eventLog.length = 0;
     return true;
   });
 
-  // Process a single message (called from renderer or tdlib service)
   ipcMain.handle("pipeline:process", async (_e, msg: MessagePayload) => {
     try {
       await processMessage(msg);
@@ -328,13 +369,11 @@ export function registerPipelineHandlers(): void {
     }
   });
 
-  // Reset AI provider (when settings change)
   ipcMain.handle("pipeline:reset-provider", () => {
     resetProvider();
     return true;
   });
 
-  // Reprocess a queue item — re-run AI on the raw text
   ipcMain.handle("pipeline:reprocess", async (_e, id: number) => {
     const item = dbGet("SELECT * FROM import_queue WHERE id = ?", [id]);
     if (!item) return { ok: false, error: "Item not found" };
@@ -343,47 +382,48 @@ export function registerPipelineHandlers(): void {
     const text = sanitizeText(item.raw_text);
 
     try {
-      // Step 1: Relevance
       const classification = await ai.checkRelevance(text, getPrompt("relevance_check"));
       if (classification === "skip") {
-        dbRun("UPDATE import_queue SET status = 'review', error = 'AI classified as irrelevant', parsed_data = '{}' WHERE id = ?", [id]);
+        dbRun(
+          "UPDATE import_queue SET status = 'review', error = 'AI classified as irrelevant', parsed_data = '{}' WHERE id = ?",
+          [id]
+        );
         return { ok: true, status: "irrelevant" };
       }
 
-      // Step 2: Meta
       const meta = await ai.extractMeta(text, classification, getPrompt("extract_meta"));
 
-      // Step 3: Count items
       let itemNames = await ai.countItems(meta.cleanedText, classification, getPrompt("count_items"));
       if (!itemNames.length) itemNames = [classification === "casting" ? "Роль" : "Вакансия"];
 
-      // Step 4: Extract each
+      await loadDictionaries();
+
       let reprocessVacancyPrompt = getPrompt("extract_vacancy");
       if (classification === "technical") {
-        await loadDictionaries();
         const profCache = getProfessionsCache();
         const profList = profCache ? profCache.map((p: any) => p.nameRu).join(", ") : "";
         reprocessVacancyPrompt = reprocessVacancyPrompt.replace("{professionsList}", profList);
       }
 
+      const reprocessRolePrompt = classification === "casting" ? buildRolePrompt() : "";
+
       const roles: any[] = [];
       const vacancies: any[] = [];
       for (const name of itemNames) {
         if (classification === "casting") {
-          roles.push(await ai.extractRole(text, name, getPrompt("extract_role")));
+          const role = await ai.extractRole(text, name, reprocessRolePrompt);
+          roles.push(enrichRole(role));
         } else {
           vacancies.push(await ai.extractVacancy(text, name, reprocessVacancyPrompt));
         }
       }
 
-      // Step 5: Assembly
       const defaultDays = parseInt(getSetting("default_expiration_days") || "3");
       let expiresAt = meta.expiresAt;
       if (!expiresAt) {
         expiresAt = new Date(Date.now() + defaultDays * 86400000).toISOString();
       }
 
-      await loadDictionaries();
       let cityId: string | undefined;
       let cityIds: string[] | undefined;
       if (meta.cities.length === 1) {
@@ -408,6 +448,7 @@ export function registerPipelineHandlers(): void {
         city: meta.cities[0] || undefined,
         cityId,
         cityIds,
+        cities: meta.cities.length ? meta.cities : undefined,
         whatsapp: meta.contacts.whatsapp || undefined,
         telegram: meta.contacts.telegram || undefined,
         phone: meta.contacts.phone || undefined,
@@ -428,7 +469,6 @@ export function registerPipelineHandlers(): void {
     }
   });
 
-  // Clean old dedup entries
   ipcMain.handle("pipeline:clean-dedup", () => {
     const days = parseInt(getSetting("dedup_cache_days") || "7");
     const cleaned = cleanOldEntries(days);

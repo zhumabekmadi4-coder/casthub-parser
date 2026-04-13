@@ -8,7 +8,13 @@ import { processMessage, logEvent } from "./pipeline.service";
 
 let client: ReturnType<typeof tdl.createClient> | null = null;
 let authState: string = "idle";
-let monitoredChatIds: Set<number> = new Set();
+
+interface MonitoredKey {
+  chatId: number;
+  threadId: number | null;
+}
+
+let monitoredChats: Map<number, MonitoredKey[]> = new Map();
 let messageHandler: ((update: any) => void) | null = null;
 
 function sendToRenderer(channel: string, ...args: any[]) {
@@ -23,18 +29,35 @@ export function getClient() {
 }
 
 export function getMonitoredChatIds() {
-  return monitoredChatIds;
+  return new Set(monitoredChats.keys());
+}
+
+function isMonitoredMessage(chatId: number, threadId: number | null): boolean {
+  const subs = monitoredChats.get(chatId);
+  if (!subs) return false;
+  // Whole-chat subscription matches every message
+  if (subs.some((s) => s.threadId === null)) return true;
+  if (threadId === null) return false;
+  return subs.some((s) => s.threadId === threadId);
 }
 
 export function registerTdlibHandlers(): void {
-  // Auth
   ipcMain.handle("tdlib:get-auth-state", () => authState);
 
   ipcMain.handle("tdlib:connect", async (_e, apiId: number, apiHash: string) => {
     if (client) return { ok: true, state: authState };
 
     try {
-      tdl.configure({ tdjson: prebuilt.getTdjson() });
+      let tdjsonPath = prebuilt.getTdjson();
+      if (app.isPackaged) {
+        // require.resolve returns a path inside app.asar, but native .dll
+        // lives in app.asar.unpacked (see asarUnpack in package.json).
+        tdjsonPath = tdjsonPath.replace(
+          `${path.sep}app.asar${path.sep}`,
+          `${path.sep}app.asar.unpacked${path.sep}`
+        );
+      }
+      tdl.configure({ tdjson: tdjsonPath });
 
       client = tdl.createClient({
         apiId,
@@ -47,48 +70,50 @@ export function registerTdlibHandlers(): void {
         console.error("TDLib error:", err);
       });
 
-      // Start login flow — don't await, it blocks until auth complete
-      client.login(() => ({
-        getPhoneNumber: async (retry) => {
-          authState = "waitPhoneNumber";
+      client
+        .login(() => ({
+          getPhoneNumber: async (_retry) => {
+            authState = "waitPhoneNumber";
+            sendToRenderer("tdlib:auth-state", authState);
+            return new Promise((resolve) => {
+              ipcMain.once("tdlib:send-phone", (_e, phone: string) => {
+                resolve(phone);
+              });
+            });
+          },
+          getAuthCode: async (_retry) => {
+            authState = "waitCode";
+            sendToRenderer("tdlib:auth-state", authState);
+            return new Promise((resolve) => {
+              ipcMain.once("tdlib:send-code", (_e, code: string) => {
+                resolve(code);
+              });
+            });
+          },
+          getPassword: async (hint, _retry) => {
+            authState = "waitPassword";
+            sendToRenderer("tdlib:auth-state", authState, hint);
+            return new Promise((resolve) => {
+              ipcMain.once("tdlib:send-password", (_e, password: string) => {
+                resolve(password);
+              });
+            });
+          },
+          getName: async () => {
+            return { firstName: "CastHub", lastName: "Parser" };
+          },
+        }))
+        .then(() => {
+          authState = "ready";
           sendToRenderer("tdlib:auth-state", authState);
-          return new Promise((resolve) => {
-            ipcMain.once("tdlib:send-phone", (_e, phone: string) => {
-              resolve(phone);
-            });
-          });
-        },
-        getAuthCode: async (retry) => {
-          authState = "waitCode";
-          sendToRenderer("tdlib:auth-state", authState);
-          return new Promise((resolve) => {
-            ipcMain.once("tdlib:send-code", (_e, code: string) => {
-              resolve(code);
-            });
-          });
-        },
-        getPassword: async (hint, retry) => {
-          authState = "waitPassword";
-          sendToRenderer("tdlib:auth-state", authState, hint);
-          return new Promise((resolve) => {
-            ipcMain.once("tdlib:send-password", (_e, password: string) => {
-              resolve(password);
-            });
-          });
-        },
-        getName: async () => {
-          return { firstName: "CastHub", lastName: "Parser" };
-        },
-      })).then(() => {
-        authState = "ready";
-        sendToRenderer("tdlib:auth-state", authState);
-        loadMonitoredChats();
-        startMessageListener();
-      }).catch((err) => {
-        console.error("TDLib login error:", err);
-        authState = "error";
-        sendToRenderer("tdlib:auth-state", authState, String(err));
-      });
+          loadMonitoredChats();
+          startMessageListener();
+        })
+        .catch((err) => {
+          console.error("TDLib login error:", err);
+          authState = "error";
+          sendToRenderer("tdlib:auth-state", authState, String(err));
+        });
 
       return { ok: true, state: "connecting" };
     } catch (err) {
@@ -97,17 +122,9 @@ export function registerTdlibHandlers(): void {
     }
   });
 
-  ipcMain.handle("tdlib:send-phone", (_e, phone: string) => {
-    // Handled by ipcMain.once in login flow
-  });
-
-  ipcMain.handle("tdlib:send-code", (_e, code: string) => {
-    // Handled by ipcMain.once in login flow
-  });
-
-  ipcMain.handle("tdlib:send-password", (_e, password: string) => {
-    // Handled by ipcMain.once in login flow
-  });
+  ipcMain.handle("tdlib:send-phone", (_e, _phone: string) => {});
+  ipcMain.handle("tdlib:send-code", (_e, _code: string) => {});
+  ipcMain.handle("tdlib:send-password", (_e, _password: string) => {});
 
   ipcMain.handle("tdlib:disconnect", async () => {
     if (client) {
@@ -134,18 +151,28 @@ export function registerTdlibHandlers(): void {
     for (const chatId of result.chat_ids) {
       try {
         const chat = await client.invoke({ _: "getChat", chat_id: chatId });
-        // Only show groups and channels (not private chats)
         if (
           chat.type._ === "chatTypeSupergroup" ||
           chat.type._ === "chatTypeBasicGroup"
         ) {
+          // Detect forum-enabled supergroups via the supergroup full info
+          let isForum = false;
+          if (chat.type._ === "chatTypeSupergroup") {
+            try {
+              const sg = await client.invoke({
+                _: "getSupergroup",
+                supergroup_id: (chat.type as any).supergroup_id,
+              });
+              isForum = !!sg.is_forum;
+            } catch {
+              // Not critical — assume not a forum
+            }
+          }
           chats.push({
             id: chat.id,
             title: chat.title,
             type: chat.type._,
-            memberCount: chat.type._ === "chatTypeSupergroup"
-              ? (chat as any).type?.member_count
-              : null,
+            isForum,
           });
         }
       } catch {
@@ -155,18 +182,64 @@ export function registerTdlibHandlers(): void {
     return chats;
   });
 
-  ipcMain.handle("tdlib:add-chat", (_e, chatId: number, title: string) => {
-    dbRun(
-      "INSERT OR IGNORE INTO monitored_chats (chat_id, title) VALUES (?, ?)",
-      [chatId, title]
-    );
-    monitoredChatIds.add(chatId);
-    return true;
+  ipcMain.handle("tdlib:get-forum-topics", async (_e, chatId: number) => {
+    if (!client || authState !== "ready") return [];
+    try {
+      const result: any = await client.invoke({
+        _: "getForumTopics",
+        chat_id: chatId,
+        query: "",
+        offset_date: 0,
+        offset_message_id: 0,
+        limit: 100,
+      } as any);
+      return (result.topics || []).map((t: any) => ({
+        threadId: t.message_thread_id,
+        title: t.info?.name || "(без названия)",
+      }));
+    } catch (err) {
+      console.error("getForumTopics error:", err);
+      return [];
+    }
   });
 
-  ipcMain.handle("tdlib:remove-chat", (_e, chatId: number) => {
-    dbRun("DELETE FROM monitored_chats WHERE chat_id = ?", [chatId]);
-    monitoredChatIds.delete(chatId);
+  ipcMain.handle(
+    "tdlib:add-chat",
+    (
+      _e,
+      chatId: number,
+      title: string,
+      threadId: number | null = null,
+      threadTitle: string | null = null
+    ) => {
+      // Avoid duplicates: same (chat_id, thread_id) pair
+      const existing = dbGet(
+        `SELECT id FROM monitored_chats
+         WHERE chat_id = ? AND COALESCE(thread_id, 0) = COALESCE(?, 0)`,
+        [chatId, threadId]
+      );
+      if (existing) return false;
+      dbRun(
+        `INSERT INTO monitored_chats (chat_id, title, thread_id, thread_title)
+         VALUES (?, ?, ?, ?)`,
+        [chatId, title, threadId, threadTitle]
+      );
+      registerSubscription(chatId, threadId);
+      return true;
+    }
+  );
+
+  ipcMain.handle("tdlib:remove-chat", (_e, id: number) => {
+    const row = dbGet("SELECT chat_id, thread_id FROM monitored_chats WHERE id = ?", [id]);
+    dbRun("DELETE FROM monitored_chats WHERE id = ?", [id]);
+    if (row) {
+      const subs = monitoredChats.get(row.chat_id);
+      if (subs) {
+        const filtered = subs.filter((s) => s.threadId !== (row.thread_id ?? null));
+        if (filtered.length) monitoredChats.set(row.chat_id, filtered);
+        else monitoredChats.delete(row.chat_id);
+      }
+    }
     return true;
   });
 
@@ -176,43 +249,50 @@ export function registerTdlibHandlers(): void {
 
   ipcMain.handle(
     "tdlib:set-collect-from",
-    (_e, chatId: number, date: string) => {
-      dbRun(
-        "UPDATE monitored_chats SET collect_from_date = ? WHERE chat_id = ?",
-        [date, chatId]
-      );
+    (_e, id: number, date: string) => {
+      dbRun("UPDATE monitored_chats SET collect_from_date = ? WHERE id = ?", [date, id]);
       return true;
     }
   );
 
   // History sync — fetches messages from newest to oldest, stops at collect_from_date
-  ipcMain.handle("tdlib:sync-history", async (_e, chatId: number) => {
+  ipcMain.handle("tdlib:sync-history", async (_e, id: number) => {
     if (!client || authState !== "ready") return { synced: 0 };
 
-    const chat = dbGet("SELECT * FROM monitored_chats WHERE chat_id = ?", [chatId]);
+    const chat = dbGet("SELECT * FROM monitored_chats WHERE id = ?", [id]);
     if (!chat) return { synced: 0 };
 
     let synced = 0;
-    let fromMsgId = 0; // 0 = start from newest message
+    let fromMsgId = 0;
     let reachedDateLimit = false;
 
-    // Fetch in batches of 50, up to 1000 messages total
     for (let i = 0; i < 20 && !reachedDateLimit; i++) {
-      const history = await client.invoke({
-        _: "getChatHistory",
-        chat_id: chatId,
-        from_message_id: fromMsgId,
-        offset: 0,
-        limit: 50,
-        only_local: false,
-      });
+      let history: any;
+      if (chat.thread_id) {
+        history = await client.invoke({
+          _: "getMessageThreadHistory",
+          chat_id: chat.chat_id,
+          message_id: chat.thread_id,
+          from_message_id: fromMsgId,
+          offset: 0,
+          limit: 50,
+        });
+      } else {
+        history = await client.invoke({
+          _: "getChatHistory",
+          chat_id: chat.chat_id,
+          from_message_id: fromMsgId,
+          offset: 0,
+          limit: 50,
+          only_local: false,
+        });
+      }
 
       if (!history.messages || history.messages.length === 0) break;
 
       for (const msg of history.messages) {
         if (!msg) continue;
 
-        // Check collect_from_date — stop if message is older
         if (chat.collect_from_date) {
           const msgDate = new Date(msg.date * 1000);
           const fromDate = new Date(chat.collect_from_date);
@@ -226,8 +306,9 @@ export function registerTdlibHandlers(): void {
         if (text && text.length >= 20) {
           try {
             await processMessage({
-              chatId,
+              chatId: chat.chat_id,
               messageId: msg.id,
+              threadId: msg.message_thread_id ?? null,
               text,
               date: msg.date,
               senderUserId: msg.sender_id?.user_id || null,
@@ -243,18 +324,16 @@ export function registerTdlibHandlers(): void {
       }
     }
 
-    // Update last_processed_message_id to the newest message
     if (synced > 0) {
       dbRun(
-        "UPDATE monitored_chats SET last_processed_message_id = ? WHERE chat_id = ?",
-        [fromMsgId, chatId]
+        "UPDATE monitored_chats SET last_processed_message_id = ? WHERE id = ?",
+        [fromMsgId, id]
       );
     }
 
     return { synced };
   });
 
-  // Get sender username
   ipcMain.handle("tdlib:get-username", async (_e, userId: number) => {
     if (!client) return null;
     try {
@@ -269,9 +348,20 @@ export function registerTdlibHandlers(): void {
   });
 }
 
+function registerSubscription(chatId: number, threadId: number | null) {
+  const subs = monitoredChats.get(chatId) || [];
+  if (!subs.some((s) => s.threadId === threadId)) {
+    subs.push({ chatId, threadId });
+  }
+  monitoredChats.set(chatId, subs);
+}
+
 function loadMonitoredChats() {
-  const chats = dbAll("SELECT chat_id FROM monitored_chats");
-  monitoredChatIds = new Set(chats.map((c: any) => c.chat_id));
+  const rows = dbAll("SELECT chat_id, thread_id FROM monitored_chats");
+  monitoredChats = new Map();
+  for (const r of rows as any[]) {
+    registerSubscription(r.chat_id, r.thread_id ?? null);
+  }
 }
 
 function startMessageListener() {
@@ -280,13 +370,16 @@ function startMessageListener() {
   messageHandler = (update: any) => {
     if (update._ === "updateNewMessage") {
       const msg = update.message;
-      if (!msg || !monitoredChatIds.has(msg.chat_id)) return;
+      if (!msg) return;
+      const threadId = msg.message_thread_id ?? null;
+      if (!isMonitoredMessage(msg.chat_id, threadId)) return;
 
       const text = extractText(msg);
       logEvent({
         type: "incoming",
         chatId: msg.chat_id,
         messageId: msg.id,
+        threadId,
         textLength: text?.length ?? 0,
       });
 
@@ -295,16 +388,19 @@ function startMessageListener() {
         return;
       }
 
+      // Update last_processed_message_id for the matching subscription(s)
       dbRun(
         `UPDATE monitored_chats
          SET last_processed_message_id = MAX(COALESCE(last_processed_message_id, 0), ?)
-         WHERE chat_id = ?`,
-        [msg.id, msg.chat_id]
+         WHERE chat_id = ?
+           AND (thread_id IS NULL OR thread_id = ?)`,
+        [msg.id, msg.chat_id, threadId ?? 0]
       );
 
       processMessage({
         chatId: msg.chat_id,
         messageId: msg.id,
+        threadId,
         text,
         date: msg.date,
         senderUserId: msg.sender_id?.user_id || null,
@@ -330,7 +426,6 @@ function extractText(msg: any): string | null {
   if (content._ === "messageText") {
     return content.text?.text || null;
   }
-  // Photo/video with caption
   if (content.caption?.text) {
     return content.caption.text;
   }

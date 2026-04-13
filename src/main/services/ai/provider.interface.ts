@@ -13,9 +13,24 @@ export interface ExtractedMeta {
 export interface ExtractedRole {
   name: string;
   gender: "male" | "female" | "other" | "any";
+  type: "lead" | "episodic" | "background";
   ageMin?: number;
   ageMax?: number;
-  type: "lead" | "episodic" | "background";
+  heightMin?: number;
+  heightMax?: number;
+  weightMin?: number;
+  weightMax?: number;
+  bust?: number;
+  waist?: number;
+  hips?: number;
+  languages?: string[];
+  appearanceType?: string;
+  bodyType?: string;
+  hairColor?: string;
+  hairType?: string;
+  eyeColor?: string;
+  faceType?: string;
+  actingEducation?: string;
   description?: string;
   payment?: string;
 }
@@ -27,6 +42,8 @@ export interface ExtractedVacancy {
   requirements?: string;
   description?: string;
 }
+
+export type StepKey = "relevance" | "meta" | "count" | "role" | "vacancy";
 
 export interface AiProvider {
   name: string;

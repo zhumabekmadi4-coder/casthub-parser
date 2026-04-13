@@ -7,6 +7,21 @@ interface Prompt {
   updated_at: string;
 }
 
+interface DictStatus {
+  loaded: boolean;
+  lastUpdate: string | null;
+  error: string | null;
+  counts: Record<string, number> | null;
+}
+
+const STEP_KEYS: { key: string; label: string }[] = [
+  { key: "relevance", label: "Релевантность" },
+  { key: "meta", label: "Метаданные" },
+  { key: "count", label: "Подсчёт ролей/вакансий" },
+  { key: "role", label: "Извлечение роли" },
+  { key: "vacancy", label: "Извлечение вакансии" },
+];
+
 export default function Settings() {
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [draft, setDraft] = useState<Record<string, string>>({});
@@ -15,6 +30,8 @@ export default function Settings() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState<string | null>(null);
+  const [dictStatus, setDictStatus] = useState<DictStatus | null>(null);
+  const [reloadingDict, setReloadingDict] = useState(false);
 
   useEffect(() => {
     window.api.settings.getAll().then((s) => {
@@ -22,7 +39,24 @@ export default function Settings() {
       setDraft(s);
     });
     window.api.prompts.getAll().then(setPrompts);
+    window.api.dictionaries.getStatus().then(setDictStatus);
+
+    const unsub = window.api.on("dictionaries:status", (status: DictStatus) => {
+      setDictStatus(status);
+    });
+    return unsub;
   }, []);
+
+  const reloadDictionaries = async () => {
+    setReloadingDict(true);
+    try {
+      await window.api.dictionaries.reload();
+      const fresh = await window.api.dictionaries.getStatus();
+      setDictStatus(fresh);
+    } finally {
+      setReloadingDict(false);
+    }
+  };
 
   const updateDraft = (key: string, value: string) => {
     setDraft((prev) => ({ ...prev, [key]: value }));
@@ -163,11 +197,110 @@ export default function Settings() {
             type="password"
           />
           <Field
-            label="Модель"
+            label="Модель (по умолчанию)"
             value={draft.ai_model ?? ""}
             onChange={(v) => updateDraft("ai_model", v)}
             placeholder="gpt-4o-mini"
           />
+        </div>
+
+        {/* Per-step overrides */}
+        <details className="mt-4 rounded-lg border border-gray-200 bg-white">
+          <summary className="cursor-pointer p-3 text-sm font-medium">
+            Настройки по шагам (опционально)
+          </summary>
+          <div className="border-t border-gray-200 p-3 space-y-3">
+            <p className="text-[11px] text-gray-500">
+              Пусто = используется модель по умолчанию и temperature 0.1.
+            </p>
+            {STEP_KEYS.map((step) => (
+              <div
+                key={step.key}
+                className="grid grid-cols-[1fr_2fr_1fr] gap-2 items-center"
+              >
+                <span className="text-xs text-gray-600">{step.label}</span>
+                <input
+                  type="text"
+                  value={draft[`ai_model_${step.key}`] ?? ""}
+                  onChange={(e) =>
+                    updateDraft(`ai_model_${step.key}`, e.target.value)
+                  }
+                  placeholder="модель"
+                  className="rounded border border-gray-300 px-2 py-1 text-xs"
+                />
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  max="2"
+                  value={draft[`ai_temp_${step.key}`] ?? ""}
+                  onChange={(e) =>
+                    updateDraft(`ai_temp_${step.key}`, e.target.value)
+                  }
+                  placeholder="temp"
+                  className="rounded border border-gray-300 px-2 py-1 text-xs"
+                />
+              </div>
+            ))}
+          </div>
+        </details>
+      </section>
+
+      {/* Dictionaries status */}
+      <section className="mb-8">
+        <h3 className="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-3">
+          Справочники CastHub
+        </h3>
+        <div className="rounded-lg border border-gray-200 bg-white p-3">
+          {dictStatus?.loaded ? (
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm">
+                  <span className="text-green-600">✓</span> Загружены
+                  {dictStatus.lastUpdate && (
+                    <span className="text-xs text-gray-400">
+                      {" "}
+                      · {new Date(dictStatus.lastUpdate).toLocaleString("ru")}
+                    </span>
+                  )}
+                </p>
+                {dictStatus.counts && (
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    Городов: {dictStatus.counts.cities}, профессий:{" "}
+                    {dictStatus.counts.professions}, цвет волос:{" "}
+                    {dictStatus.counts.hairColors}, цвет глаз:{" "}
+                    {dictStatus.counts.eyeColors}, телосложение:{" "}
+                    {dictStatus.counts.bodyTypes}
+                  </p>
+                )}
+              </div>
+              <button
+                onClick={reloadDictionaries}
+                disabled={reloadingDict}
+                className="rounded border border-gray-300 px-3 py-1 text-xs hover:bg-gray-50 disabled:opacity-50"
+              >
+                {reloadingDict ? "..." : "Обновить"}
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-sm text-red-700">
+                <span>✗</span> Не загружены
+              </p>
+              {dictStatus?.error && (
+                <p className="text-[11px] text-red-600 break-all">
+                  {dictStatus.error}
+                </p>
+              )}
+              <button
+                onClick={reloadDictionaries}
+                disabled={reloadingDict}
+                className="rounded bg-blue-600 px-3 py-1 text-xs text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {reloadingDict ? "Загрузка..." : "Попробовать снова"}
+              </button>
+            </div>
+          )}
         </div>
       </section>
 

@@ -38,15 +38,22 @@ const api = {
       ipcRenderer.send("tdlib:send-password", password),
     disconnect: () => ipcRenderer.invoke("tdlib:disconnect"),
     getChats: () => ipcRenderer.invoke("tdlib:get-chats"),
-    addChat: (chatId: number, title: string) =>
-      ipcRenderer.invoke("tdlib:add-chat", chatId, title),
-    removeChat: (chatId: number) =>
-      ipcRenderer.invoke("tdlib:remove-chat", chatId),
+    getForumTopics: (chatId: number) =>
+      ipcRenderer.invoke("tdlib:get-forum-topics", chatId),
+    addChat: (
+      chatId: number,
+      title: string,
+      threadId: number | null = null,
+      threadTitle: string | null = null
+    ) =>
+      ipcRenderer.invoke("tdlib:add-chat", chatId, title, threadId, threadTitle),
+    removeChat: (id: number) =>
+      ipcRenderer.invoke("tdlib:remove-chat", id),
     getMonitoredChats: () => ipcRenderer.invoke("tdlib:get-monitored-chats"),
-    setCollectFrom: (chatId: number, date: string) =>
-      ipcRenderer.invoke("tdlib:set-collect-from", chatId, date),
-    syncHistory: (chatId: number) =>
-      ipcRenderer.invoke("tdlib:sync-history", chatId),
+    setCollectFrom: (id: number, date: string) =>
+      ipcRenderer.invoke("tdlib:set-collect-from", id, date),
+    syncHistory: (id: number) =>
+      ipcRenderer.invoke("tdlib:sync-history", id),
     getUsername: (userId: number) =>
       ipcRenderer.invoke("tdlib:get-username", userId),
   },
@@ -69,16 +76,24 @@ const api = {
     stopDelivery: () => ipcRenderer.invoke("api:stop-delivery"),
   },
 
+  // Dictionaries (CastHub reference data)
+  dictionaries: {
+    getStatus: () => ipcRenderer.invoke("dictionaries:get-status"),
+    reload: () => ipcRenderer.invoke("dictionaries:reload"),
+  },
+
   // App
   app: {
     restart: () => ipcRenderer.invoke("app:restart"),
   },
 
   // Events from main process
-  on: (channel: string, callback: (...args: any[]) => void) => {
+  on: (channel: string, callback: (...args: any[]) => void): (() => void) => {
     const subscription = (_event: any, ...args: any[]) => callback(...args);
     ipcRenderer.on(channel, subscription);
-    return () => ipcRenderer.removeListener(channel, subscription);
+    return () => {
+      ipcRenderer.removeListener(channel, subscription);
+    };
   },
 };
 

@@ -1,8 +1,11 @@
 import { useState, useEffect } from "react";
 
 interface MonitoredChat {
+  id: number;
   chat_id: number;
   title: string;
+  thread_id: number | null;
+  thread_title: string | null;
   last_processed_message_id: number | null;
   collect_from_date: string | null;
   added_at: string;
@@ -12,6 +15,12 @@ interface TelegramChat {
   id: number;
   title: string;
   type: string;
+  isForum?: boolean;
+}
+
+interface ForumTopic {
+  threadId: number;
+  title: string;
 }
 
 export default function ChatManager() {
@@ -20,6 +29,11 @@ export default function ChatManager() {
   const [availableChats, setAvailableChats] = useState<TelegramChat[]>([]);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+
+  // Topic-picker step
+  const [pendingChat, setPendingChat] = useState<TelegramChat | null>(null);
+  const [topics, setTopics] = useState<ForumTopic[]>([]);
+  const [topicsLoading, setTopicsLoading] = useState(false);
 
   // Auth form state
   const [apiId, setApiId] = useState("");
@@ -31,7 +45,6 @@ export default function ChatManager() {
 
   useEffect(() => {
     window.api.tdlib.getAuthState().then(setAuthState);
-    // Load saved credentials for display
     window.api.settings.getAll().then((s) => {
       if (s.tdlib_api_id) setApiId(s.tdlib_api_id);
       if (s.tdlib_api_hash) setApiHash(s.tdlib_api_hash);
@@ -53,7 +66,6 @@ export default function ChatManager() {
   const handleConnect = async () => {
     const id = parseInt(apiId);
     if (!id || !apiHash) return;
-    // Save credentials for next launch
     await window.api.settings.set("tdlib_api_id", apiId);
     await window.api.settings.set("tdlib_api_hash", apiHash);
     await window.api.tdlib.connect(id, apiHash);
@@ -84,24 +96,61 @@ export default function ChatManager() {
     setShowAddDialog(true);
   };
 
-  const addChat = async (chat: TelegramChat) => {
-    await window.api.tdlib.addChat(chat.id, chat.title);
-    loadMonitoredChats();
+  const closeDialog = () => {
     setShowAddDialog(false);
+    setPendingChat(null);
+    setTopics([]);
+    setSearchQuery("");
   };
 
-  const removeChat = async (chatId: number) => {
-    await window.api.tdlib.removeChat(chatId);
+  const selectChat = async (chat: TelegramChat) => {
+    if (chat.isForum) {
+      setPendingChat(chat);
+      setTopicsLoading(true);
+      try {
+        const list = await window.api.tdlib.getForumTopics(chat.id);
+        setTopics(list);
+      } finally {
+        setTopicsLoading(false);
+      }
+    } else {
+      await window.api.tdlib.addChat(chat.id, chat.title, null, null);
+      loadMonitoredChats();
+      closeDialog();
+    }
+  };
+
+  const subscribeWholeChat = async () => {
+    if (!pendingChat) return;
+    await window.api.tdlib.addChat(pendingChat.id, pendingChat.title, null, null);
+    loadMonitoredChats();
+    closeDialog();
+  };
+
+  const subscribeTopic = async (topic: ForumTopic) => {
+    if (!pendingChat) return;
+    await window.api.tdlib.addChat(
+      pendingChat.id,
+      pendingChat.title,
+      topic.threadId,
+      topic.title
+    );
+    loadMonitoredChats();
+    closeDialog();
+  };
+
+  const removeChat = async (id: number) => {
+    await window.api.tdlib.removeChat(id);
     loadMonitoredChats();
   };
 
-  const setCollectFrom = async (chatId: number, date: string) => {
-    await window.api.tdlib.setCollectFrom(chatId, date);
+  const setCollectFrom = async (id: number, date: string) => {
+    await window.api.tdlib.setCollectFrom(id, date);
     loadMonitoredChats();
   };
 
-  const syncHistory = async (chatId: number) => {
-    const result = await window.api.tdlib.syncHistory(chatId);
+  const syncHistory = async (id: number) => {
+    const result = await window.api.tdlib.syncHistory(id);
     alert(`Синхронизировано ${result.synced} сообщений`);
   };
 
@@ -109,7 +158,6 @@ export default function ChatManager() {
     c.title.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  // Auth UI
   if (authState !== "ready") {
     return (
       <div className="p-6 max-w-md mx-auto">
@@ -237,7 +285,6 @@ export default function ChatManager() {
     );
   }
 
-  // Chat management UI (when connected)
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-6">
@@ -258,7 +305,6 @@ export default function ChatManager() {
         </div>
       </div>
 
-      {/* Monitored chats list */}
       {monitoredChats.length === 0 ? (
         <div className="rounded-xl border border-gray-200 bg-white p-8 text-center text-sm text-gray-500">
           Нет отслеживаемых чатов. Нажмите "Добавить чат" чтобы начать.
@@ -267,11 +313,19 @@ export default function ChatManager() {
         <div className="space-y-2">
           {monitoredChats.map((chat) => (
             <div
-              key={chat.chat_id}
+              key={chat.id}
               className="flex items-center gap-4 rounded-xl border border-gray-200 bg-white p-4"
             >
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium truncate">{chat.title}</p>
+                <p className="text-sm font-medium truncate">
+                  {chat.title}
+                  {chat.thread_title && (
+                    <span className="text-blue-600 font-normal">
+                      {" "}
+                      › {chat.thread_title}
+                    </span>
+                  )}
+                </p>
                 <p className="text-[11px] text-gray-400">
                   Добавлен: {chat.added_at}
                   {chat.last_processed_message_id &&
@@ -283,21 +337,19 @@ export default function ChatManager() {
                 <input
                   type="date"
                   value={chat.collect_from_date || ""}
-                  onChange={(e) =>
-                    setCollectFrom(chat.chat_id, e.target.value)
-                  }
+                  onChange={(e) => setCollectFrom(chat.id, e.target.value)}
                   className="rounded border border-gray-300 px-2 py-1 text-xs"
                   title="Собирать с"
                 />
                 <button
-                  onClick={() => syncHistory(chat.chat_id)}
+                  onClick={() => syncHistory(chat.id)}
                   className="rounded bg-blue-100 px-2 py-1 text-xs text-blue-700 hover:bg-blue-200"
                   title="Синхронизировать историю"
                 >
                   Синхр.
                 </button>
                 <button
-                  onClick={() => removeChat(chat.chat_id)}
+                  onClick={() => removeChat(chat.id)}
                   className="rounded bg-red-100 px-2 py-1 text-xs text-red-700 hover:bg-red-200"
                 >
                   Удалить
@@ -308,59 +360,101 @@ export default function ChatManager() {
         </div>
       )}
 
-      {/* Add chat dialog */}
       {showAddDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
           <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-bold">Выберите чат</h3>
+              <h3 className="font-bold">
+                {pendingChat ? `Темы: ${pendingChat.title}` : "Выберите чат"}
+              </h3>
               <button
-                onClick={() => setShowAddDialog(false)}
+                onClick={closeDialog}
                 className="text-gray-400 hover:text-gray-600"
               >
                 ✕
               </button>
             </div>
 
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Поиск..."
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm mb-3"
-            />
+            {!pendingChat && (
+              <>
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Поиск..."
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm mb-3"
+                />
 
-            <div className="max-h-80 overflow-y-auto space-y-1">
-              {filteredChats.map((chat) => {
-                const isMonitored = monitoredChats.some(
-                  (m) => m.chat_id === chat.id
-                );
-                return (
-                  <button
-                    key={chat.id}
-                    disabled={isMonitored}
-                    onClick={() => addChat(chat)}
-                    className={`w-full text-left rounded-lg px-3 py-2 text-sm transition-colors ${
-                      isMonitored
-                        ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                        : "hover:bg-blue-50"
-                    }`}
-                  >
-                    <span className="font-medium">{chat.title}</span>
-                    {isMonitored && (
-                      <span className="ml-2 text-[10px]">
-                        (уже отслеживается)
+                <div className="max-h-80 overflow-y-auto space-y-1">
+                  {filteredChats.map((chat) => (
+                    <button
+                      key={chat.id}
+                      onClick={() => selectChat(chat)}
+                      className="w-full text-left rounded-lg px-3 py-2 text-sm hover:bg-blue-50"
+                    >
+                      <span className="font-medium">{chat.title}</span>
+                      {chat.isForum && (
+                        <span className="ml-2 text-[10px] text-blue-600">
+                          (форум)
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                  {filteredChats.length === 0 && (
+                    <p className="text-sm text-gray-400 text-center py-4">
+                      Чаты не найдены
+                    </p>
+                  )}
+                </div>
+              </>
+            )}
+
+            {pendingChat && (
+              <>
+                {topicsLoading ? (
+                  <p className="text-sm text-gray-500 text-center py-6">
+                    Загрузка тем...
+                  </p>
+                ) : (
+                  <>
+                    <button
+                      onClick={subscribeWholeChat}
+                      className="w-full text-left rounded-lg px-3 py-2 text-sm hover:bg-blue-50 border border-dashed border-gray-300 mb-2"
+                    >
+                      <span className="font-medium">📢 Весь чат</span>
+                      <span className="block text-[11px] text-gray-500">
+                        Подписаться на все темы
                       </span>
-                    )}
-                  </button>
-                );
-              })}
-              {filteredChats.length === 0 && (
-                <p className="text-sm text-gray-400 text-center py-4">
-                  Чаты не найдены
-                </p>
-              )}
-            </div>
+                    </button>
+                    <div className="max-h-72 overflow-y-auto space-y-1">
+                      {topics.map((t) => (
+                        <button
+                          key={t.threadId}
+                          onClick={() => subscribeTopic(t)}
+                          className="w-full text-left rounded-lg px-3 py-2 text-sm hover:bg-blue-50"
+                        >
+                          {t.title}
+                        </button>
+                      ))}
+                      {topics.length === 0 && (
+                        <p className="text-sm text-gray-400 text-center py-4">
+                          Темы не найдены
+                        </p>
+                      )}
+                    </div>
+                  </>
+                )}
+                <button
+                  onClick={() => {
+                    setPendingChat(null);
+                    setTopics([]);
+                  }}
+                  className="mt-3 text-xs text-gray-500 hover:text-gray-700"
+                >
+                  ← Назад к списку чатов
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}
