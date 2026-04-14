@@ -66,7 +66,8 @@ export interface AiProvider {
   name: string;
   checkRelevance(text: string, prompt: string): Promise<"casting" | "technical" | "skip">;
   extractMeta(text: string, type: string, prompt: string): Promise<ExtractedMeta>;
-  countItems(text: string, type: string, prompt: string): Promise<string[]>;
+  countRoles(text: string, prompt: string): Promise<string[]>;
+  countVacancies(text: string, prompt: string): Promise<string[]>;
   extractRoleBasic(text: string, roleName: string, prompt: string): Promise<ExtractedRoleBasic>;
   extractRoleAppearance(text: string, roleName: string, prompt: string): Promise<ExtractedRoleAppearance>;
   extractRoleSkills(text: string, roleName: string, prompt: string): Promise<ExtractedRoleSkills>;

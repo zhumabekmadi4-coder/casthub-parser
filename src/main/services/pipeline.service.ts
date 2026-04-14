@@ -86,6 +86,11 @@ export interface MessagePayload {
   forwardInfo: any;
 }
 
+interface SubPipelineResult {
+  roles?: any[];
+  vacancies?: any[];
+}
+
 // Build the appearance prompt — only inject the appearance-related reference lists.
 function buildAppearancePrompt(): string {
   const dict = getDictionaries();
@@ -150,11 +155,98 @@ function enrichRole(role: ExtractedRole): any {
   };
 }
 
+function resolveCitiesFromMeta(cities: string[]): { cityId?: string; cityIds?: string[] } {
+  if (cities.length === 1) {
+    const id = resolveCityName(cities[0]);
+    return id ? { cityId: id } : {};
+  }
+  if (cities.length > 1) {
+    const resolved = cities.map(resolveCityName).filter((id): id is string => !!id);
+    return resolved.length > 0 ? { cityIds: resolved } : {};
+  }
+  return {};
+}
+
+function finalizeExpiresAt(metaExpiresAt: string | null, baseDateMs: number): string {
+  if (metaExpiresAt) return metaExpiresAt;
+  const defaultDays = parseInt(getSetting("default_expiration_days") || "3");
+  return new Date(baseDateMs + defaultDays * 24 * 60 * 60 * 1000).toISOString();
+}
+
+async function runCastingPipeline(
+  ai: AiProvider,
+  text: string,
+  meta: ExtractedMeta
+): Promise<SubPipelineResult> {
+  let roleNames: string[];
+  try {
+    roleNames = await ai.countRoles(meta.cleanedText, getPrompt("count_roles"));
+  } catch (err) {
+    throw new Error(`count_roles failed: ${err}`);
+  }
+  if (!roleNames.length) roleNames = ["Роль"];
+
+  const basicPrompt = getPrompt("extract_role_basic");
+  const appearancePrompt = buildAppearancePrompt();
+  const skillsPrompt = buildSkillsPrompt();
+  const measurementsPrompt = getPrompt("extract_role_measurements");
+
+  const results = await Promise.allSettled(
+    roleNames.map((name) =>
+      extractRoleParallel(ai, text, name, basicPrompt, appearancePrompt, skillsPrompt, measurementsPrompt)
+        .then((role) => enrichRole(role))
+    )
+  );
+
+  const roles: any[] = [];
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    if (r.status === "fulfilled") roles.push(r.value);
+    else console.error(`Failed to extract role ${roleNames[i]}:`, r.reason);
+  }
+  return { roles };
+}
+
+async function runTechnicalPipeline(
+  ai: AiProvider,
+  text: string,
+  meta: ExtractedMeta
+): Promise<SubPipelineResult> {
+  let vacancyNames: string[];
+  try {
+    vacancyNames = await ai.countVacancies(meta.cleanedText, getPrompt("count_vacancies"));
+  } catch (err) {
+    throw new Error(`count_vacancies failed: ${err}`);
+  }
+  if (!vacancyNames.length) vacancyNames = ["Вакансия"];
+
+  const profCache = getProfessionsCache();
+  const profList = profCache ? profCache.map((p: any) => p.nameRu).join(", ") : "";
+  const vacancyPrompt = getPrompt("extract_vacancy").replace("{professionsList}", profList);
+
+  const results = await Promise.allSettled(
+    vacancyNames.map((name) => ai.extractVacancy(text, name, vacancyPrompt))
+  );
+
+  const vacancies: any[] = [];
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    if (r.status === "fulfilled") {
+      const v: any = r.value;
+      const profId = resolveProfessionName(v.professionName);
+      if (profId) v.professionId = profId;
+      vacancies.push(v);
+    } else {
+      console.error(`Failed to extract vacancy ${vacancyNames[i]}:`, r.reason);
+    }
+  }
+  return { vacancies };
+}
+
 export async function processMessage(msg: MessagePayload): Promise<void> {
   const { chatId, messageId, date, senderUserId, forwardInfo } = msg;
 
   const text = msg.text ? sanitizeText(msg.text) : null;
-
   if (!text || text.length < 20) return;
 
   const forwardOrigin = forwardInfo?.origin
@@ -162,12 +254,7 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
     : null;
 
   if (isDuplicate(chatId, messageId, text, forwardOrigin)) {
-    logEvent({
-      type: "skipped",
-      reason: "duplicate",
-      chatId,
-      messageId,
-    });
+    logEvent({ type: "skipped", reason: "duplicate", chatId, messageId });
     return;
   }
 
@@ -178,25 +265,13 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
     classification = await ai.checkRelevance(text, getPrompt("relevance_check"));
   } catch (err) {
     markProcessed(chatId, messageId, text, "error", forwardOrigin);
-    logEvent({
-      type: "error",
-      step: "relevance",
-      error: String(err),
-      chatId,
-      messageId,
-    });
+    logEvent({ type: "error", step: "relevance", error: String(err), chatId, messageId });
     return;
   }
 
   if (classification === "skip") {
     markProcessed(chatId, messageId, text, "skip", forwardOrigin);
-    logEvent({
-      type: "skipped",
-      reason: "irrelevant",
-      chatId,
-      messageId,
-      preview: text.substring(0, 80),
-    });
+    logEvent({ type: "skipped", reason: "irrelevant", chatId, messageId, preview: text.substring(0, 80) });
     return;
   }
 
@@ -209,9 +284,8 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
     return;
   }
 
-  const hasContact =
-    meta.contacts.telegram || meta.contacts.whatsapp || meta.contacts.phone;
-
+  // Contact fallback via TDLib getUser
+  const hasContact = meta.contacts.telegram || meta.contacts.whatsapp || meta.contacts.phone;
   if (!hasContact && senderUserId) {
     try {
       const tdlib = require("./tdlib.service");
@@ -227,122 +301,36 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
     }
   }
 
-  const finalHasContact =
-    meta.contacts.telegram || meta.contacts.whatsapp || meta.contacts.phone;
+  const finalHasContact = meta.contacts.telegram || meta.contacts.whatsapp || meta.contacts.phone;
   if (!finalHasContact) {
     markProcessed(chatId, messageId, text, classification, forwardOrigin);
-    logEvent({
-      type: "skipped",
-      reason: "no_contacts",
-      chatId,
-      messageId,
-    });
+    logEvent({ type: "skipped", reason: "no_contacts", chatId, messageId });
     return;
   }
 
   await loadDictionaries();
 
-  let itemNames: string[];
+  let sub: SubPipelineResult;
   try {
-    itemNames = await ai.countItems(
-      meta.cleanedText,
-      classification,
-      getPrompt("count_items")
-    );
+    sub = classification === "casting"
+      ? await runCastingPipeline(ai, text, meta)
+      : await runTechnicalPipeline(ai, text, meta);
   } catch (err) {
-    enqueueFailed(chatId, messageId, text, "ai_failed", `Count items failed: ${err}`);
+    enqueueFailed(chatId, messageId, text, "ai_failed", String(err));
     markProcessed(chatId, messageId, text, classification, forwardOrigin);
     return;
   }
 
-  if (!itemNames.length) {
-    itemNames = [classification === "casting" ? "Роль" : "Вакансия"];
-  }
-
-  const roles: any[] = [];
-  const vacancies: any[] = [];
-
-  let vacancyPrompt = getPrompt("extract_vacancy");
-  if (classification === "technical") {
-    const profCache = getProfessionsCache();
-    const profList = profCache ? profCache.map((p: any) => p.nameRu).join(", ") : "";
-    vacancyPrompt = vacancyPrompt.replace("{professionsList}", profList);
-  }
-
-  // For casting: prepare the four sub-prompts once per message (dictionary is
-  // injected only into appearance + skills prompts; basic + measurements don't
-  // need any dictionary).
-  const basicPrompt =
-    classification === "casting" ? getPrompt("extract_role_basic") : "";
-  const appearancePrompt =
-    classification === "casting" ? buildAppearancePrompt() : "";
-  const skillsPrompt =
-    classification === "casting" ? buildSkillsPrompt() : "";
-  const measurementsPrompt =
-    classification === "casting" ? getPrompt("extract_role_measurements") : "";
-
-  // Roles/vacancies within one message run in parallel: each role internally
-  // fans out into 4 sub-calls (also in parallel). The global semaphore in
-  // OpenAIProvider keeps the total in-flight calls bounded.
-  const itemResults = await Promise.allSettled(
-    itemNames.map(async (name) => {
-      if (classification === "casting") {
-        const role = await extractRoleParallel(
-          ai,
-          text,
-          name,
-          basicPrompt,
-          appearancePrompt,
-          skillsPrompt,
-          measurementsPrompt
-        );
-        return { kind: "role" as const, value: enrichRole(role) };
-      } else {
-        const vacancy = await ai.extractVacancy(text, name, vacancyPrompt);
-        return { kind: "vacancy" as const, value: vacancy };
-      }
-    })
-  );
-
-  for (let i = 0; i < itemResults.length; i++) {
-    const r = itemResults[i];
-    if (r.status === "fulfilled") {
-      if (r.value.kind === "role") roles.push(r.value.value);
-      else vacancies.push(r.value.value);
-    } else {
-      console.error(`Failed to extract ${itemNames[i]}:`, r.reason);
-    }
-  }
-
+  const roles = sub.roles ?? [];
+  const vacancies = sub.vacancies ?? [];
   if (roles.length === 0 && vacancies.length === 0) {
     enqueueFailed(chatId, messageId, text, "ai_failed", "No roles/vacancies extracted");
     markProcessed(chatId, messageId, text, classification, forwardOrigin);
     return;
   }
 
-  const defaultDays = parseInt(getSetting("default_expiration_days") || "3");
-  let expiresAt = meta.expiresAt;
-  if (!expiresAt) {
-    const d = new Date(date * 1000 + defaultDays * 24 * 60 * 60 * 1000);
-    expiresAt = d.toISOString();
-  }
-
-  let cityId: string | undefined;
-  let cityIds: string[] | undefined;
-
-  if (meta.cities.length === 1) {
-    cityId = resolveCityName(meta.cities[0]) || undefined;
-  } else if (meta.cities.length > 1) {
-    const resolved = meta.cities.map(resolveCityName).filter((id): id is string => !!id);
-    if (resolved.length > 0) cityIds = resolved;
-  }
-
-  if (classification === "technical" && vacancies.length > 0) {
-    for (const v of vacancies) {
-      const profId = resolveProfessionName(v.professionName);
-      if (profId) v.professionId = profId;
-    }
-  }
+  const expiresAt = finalizeExpiresAt(meta.expiresAt, date * 1000);
+  const { cityId, cityIds } = resolveCitiesFromMeta(meta.cities);
 
   const parsedData = {
     externalId: externalIdHash(chatId, messageId),
@@ -453,77 +441,16 @@ export function registerPipelineHandlers(): void {
 
       const meta = await ai.extractMeta(text, classification, getPrompt("extract_meta"));
 
-      let itemNames = await ai.countItems(meta.cleanedText, classification, getPrompt("count_items"));
-      if (!itemNames.length) itemNames = [classification === "casting" ? "Роль" : "Вакансия"];
-
       await loadDictionaries();
 
-      let reprocessVacancyPrompt = getPrompt("extract_vacancy");
-      if (classification === "technical") {
-        const profCache = getProfessionsCache();
-        const profList = profCache ? profCache.map((p: any) => p.nameRu).join(", ") : "";
-        reprocessVacancyPrompt = reprocessVacancyPrompt.replace("{professionsList}", profList);
-      }
+      const sub = classification === "casting"
+        ? await runCastingPipeline(ai, text, meta)
+        : await runTechnicalPipeline(ai, text, meta);
 
-      const reBasic = classification === "casting" ? getPrompt("extract_role_basic") : "";
-      const reAppearance = classification === "casting" ? buildAppearancePrompt() : "";
-      const reSkills = classification === "casting" ? buildSkillsPrompt() : "";
-      const reMeasurements = classification === "casting" ? getPrompt("extract_role_measurements") : "";
-
-      const roles: any[] = [];
-      const vacancies: any[] = [];
-
-      const reResults = await Promise.allSettled(
-        itemNames.map(async (name) => {
-          if (classification === "casting") {
-            const role = await extractRoleParallel(
-              ai,
-              text,
-              name,
-              reBasic,
-              reAppearance,
-              reSkills,
-              reMeasurements
-            );
-            return { kind: "role" as const, value: enrichRole(role) };
-          } else {
-            const v = await ai.extractVacancy(text, name, reprocessVacancyPrompt);
-            return { kind: "vacancy" as const, value: v };
-          }
-        })
-      );
-
-      for (let i = 0; i < reResults.length; i++) {
-        const r = reResults[i];
-        if (r.status === "fulfilled") {
-          if (r.value.kind === "role") roles.push(r.value.value);
-          else vacancies.push(r.value.value);
-        } else {
-          console.error(`Failed to extract ${itemNames[i]}:`, r.reason);
-        }
-      }
-
-      const defaultDays = parseInt(getSetting("default_expiration_days") || "3");
-      let expiresAt = meta.expiresAt;
-      if (!expiresAt) {
-        expiresAt = new Date(Date.now() + defaultDays * 86400000).toISOString();
-      }
-
-      let cityId: string | undefined;
-      let cityIds: string[] | undefined;
-      if (meta.cities.length === 1) {
-        cityId = resolveCityName(meta.cities[0]) || undefined;
-      } else if (meta.cities.length > 1) {
-        const resolved = meta.cities.map(resolveCityName).filter((x): x is string => !!x);
-        if (resolved.length > 0) cityIds = resolved;
-      }
-
-      if (classification === "technical") {
-        for (const v of vacancies) {
-          const profId = resolveProfessionName(v.professionName);
-          if (profId) v.professionId = profId;
-        }
-      }
+      const roles = sub.roles ?? [];
+      const vacancies = sub.vacancies ?? [];
+      const expiresAt = finalizeExpiresAt(meta.expiresAt, Date.now());
+      const { cityId, cityIds } = resolveCitiesFromMeta(meta.cities);
 
       const parsedData = {
         externalId: item.content_hash,

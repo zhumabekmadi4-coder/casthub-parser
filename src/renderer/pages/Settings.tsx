@@ -108,7 +108,8 @@ export default function Settings() {
   const promptLabels: Record<string, string> = {
     relevance_check: "Проверка релевантности",
     extract_meta: "Извлечение метаданных",
-    count_items: "Подсчёт ролей/вакансий",
+    count_roles: "Подсчёт ролей (casting)",
+    count_vacancies: "Подсчёт вакансий (technical)",
     extract_role_basic: "Роль · базовая инфо (имя, пол, возраст, описание, оплата)",
     extract_role_appearance: "Роль · внешность (тип, телосложение, волосы, глаза, лицо)",
     extract_role_skills: "Роль · навыки (языки, актёрское образование)",

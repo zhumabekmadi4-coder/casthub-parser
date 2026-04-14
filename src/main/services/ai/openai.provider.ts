@@ -105,19 +105,23 @@ export class OpenAIProvider implements AiProvider {
     return this.parseJson<ExtractedMeta>(result);
   }
 
-  async countItems(
-    text: string,
-    type: string,
-    prompt: string
-  ): Promise<string[]> {
+  private async _countList(prompt: string, text: string): Promise<string[]> {
     const result = await this.chat(
       "count",
       prompt + "\nReturn JSON object with key \"items\" containing the array.",
-      `Type: ${type}\n\n${text}`,
+      text,
       true
     );
     const parsed = this.parseJson<{ items: string[] }>(result);
-    return parsed.items || [];
+    return Array.isArray(parsed.items) ? parsed.items : [];
+  }
+
+  async countRoles(text: string, prompt: string): Promise<string[]> {
+    return this._countList(prompt, text);
+  }
+
+  async countVacancies(text: string, prompt: string): Promise<string[]> {
+    return this._countList(prompt, text);
   }
 
   async extractRoleBasic(
