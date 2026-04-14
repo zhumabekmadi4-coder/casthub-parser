@@ -84,22 +84,51 @@ export interface MessagePayload {
   forwardInfo: any;
 }
 
-// Build the role prompt by injecting all reference list snippets
-function buildRolePrompt(): string {
+// Build the appearance prompt — only inject the appearance-related reference lists.
+function buildAppearancePrompt(): string {
   const dict = getDictionaries();
-  const base = getPrompt("extract_role");
-  const list = (arr: any[] | undefined, field: "code" | "nameRu") =>
-    arr?.length ? arr.map((x) => x[field]).join(", ") : "(unavailable)";
+  const base = getPrompt("extract_role_appearance");
+  const list = (arr: any[] | undefined) =>
+    arr?.length ? arr.map((x) => x.code).join(", ") : "(unavailable)";
 
   return base
-    .replace("{languagesList}", list(dict?.languages, "code"))
-    .replace("{appearanceTypesList}", list(dict?.appearanceTypes, "code"))
-    .replace("{bodyTypesList}", list(dict?.bodyTypes, "code"))
-    .replace("{hairColorsList}", list(dict?.hairColors, "code"))
-    .replace("{hairTypesList}", list(dict?.hairTypes, "code"))
-    .replace("{eyeColorsList}", list(dict?.eyeColors, "code"))
-    .replace("{faceTypesList}", list(dict?.faceTypes, "code"))
-    .replace("{actingEducationList}", list(dict?.actingEducation, "code"));
+    .replace("{appearanceTypesList}", list(dict?.appearanceTypes))
+    .replace("{bodyTypesList}", list(dict?.bodyTypes))
+    .replace("{hairColorsList}", list(dict?.hairColors))
+    .replace("{hairTypesList}", list(dict?.hairTypes))
+    .replace("{eyeColorsList}", list(dict?.eyeColors))
+    .replace("{faceTypesList}", list(dict?.faceTypes));
+}
+
+// Build the skills prompt — only languages and acting education lists.
+function buildSkillsPrompt(): string {
+  const dict = getDictionaries();
+  const base = getPrompt("extract_role_skills");
+  const list = (arr: any[] | undefined) =>
+    arr?.length ? arr.map((x) => x.code).join(", ") : "(unavailable)";
+
+  return base
+    .replace("{languagesList}", list(dict?.languages))
+    .replace("{actingEducationList}", list(dict?.actingEducation));
+}
+
+// Run the four role sub-extractions in parallel and merge into one role.
+async function extractRoleParallel(
+  ai: AiProvider,
+  text: string,
+  roleName: string,
+  basicPrompt: string,
+  appearancePrompt: string,
+  skillsPrompt: string,
+  measurementsPrompt: string
+): Promise<ExtractedRole> {
+  const [basic, appearance, skills, measurements] = await Promise.all([
+    ai.extractRoleBasic(text, roleName, basicPrompt),
+    ai.extractRoleAppearance(text, roleName, appearancePrompt),
+    ai.extractRoleSkills(text, roleName, skillsPrompt),
+    ai.extractRoleMeasurements(text, roleName, measurementsPrompt),
+  ]);
+  return { ...basic, ...appearance, ...skills, ...measurements };
 }
 
 // Resolve role's reference codes → UUIDs, drop fields where dictionary is missing
@@ -238,19 +267,48 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
     vacancyPrompt = vacancyPrompt.replace("{professionsList}", profList);
   }
 
-  const rolePrompt = classification === "casting" ? buildRolePrompt() : "";
+  // For casting: prepare the four sub-prompts once per message (dictionary is
+  // injected only into appearance + skills prompts; basic + measurements don't
+  // need any dictionary).
+  const basicPrompt =
+    classification === "casting" ? getPrompt("extract_role_basic") : "";
+  const appearancePrompt =
+    classification === "casting" ? buildAppearancePrompt() : "";
+  const skillsPrompt =
+    classification === "casting" ? buildSkillsPrompt() : "";
+  const measurementsPrompt =
+    classification === "casting" ? getPrompt("extract_role_measurements") : "";
 
-  for (const name of itemNames) {
-    try {
+  // Roles/vacancies within one message run in parallel: each role internally
+  // fans out into 4 sub-calls (also in parallel). The global semaphore in
+  // OpenAIProvider keeps the total in-flight calls bounded.
+  const itemResults = await Promise.allSettled(
+    itemNames.map(async (name) => {
       if (classification === "casting") {
-        const role = await ai.extractRole(text, name, rolePrompt);
-        roles.push(enrichRole(role));
+        const role = await extractRoleParallel(
+          ai,
+          text,
+          name,
+          basicPrompt,
+          appearancePrompt,
+          skillsPrompt,
+          measurementsPrompt
+        );
+        return { kind: "role" as const, value: enrichRole(role) };
       } else {
         const vacancy = await ai.extractVacancy(text, name, vacancyPrompt);
-        vacancies.push(vacancy);
+        return { kind: "vacancy" as const, value: vacancy };
       }
-    } catch (err) {
-      console.error(`Failed to extract ${name}:`, err);
+    })
+  );
+
+  for (let i = 0; i < itemResults.length; i++) {
+    const r = itemResults[i];
+    if (r.status === "fulfilled") {
+      if (r.value.kind === "role") roles.push(r.value.value);
+      else vacancies.push(r.value.value);
+    } else {
+      console.error(`Failed to extract ${itemNames[i]}:`, r.reason);
     }
   }
 
@@ -405,16 +463,41 @@ export function registerPipelineHandlers(): void {
         reprocessVacancyPrompt = reprocessVacancyPrompt.replace("{professionsList}", profList);
       }
 
-      const reprocessRolePrompt = classification === "casting" ? buildRolePrompt() : "";
+      const reBasic = classification === "casting" ? getPrompt("extract_role_basic") : "";
+      const reAppearance = classification === "casting" ? buildAppearancePrompt() : "";
+      const reSkills = classification === "casting" ? buildSkillsPrompt() : "";
+      const reMeasurements = classification === "casting" ? getPrompt("extract_role_measurements") : "";
 
       const roles: any[] = [];
       const vacancies: any[] = [];
-      for (const name of itemNames) {
-        if (classification === "casting") {
-          const role = await ai.extractRole(text, name, reprocessRolePrompt);
-          roles.push(enrichRole(role));
+
+      const reResults = await Promise.allSettled(
+        itemNames.map(async (name) => {
+          if (classification === "casting") {
+            const role = await extractRoleParallel(
+              ai,
+              text,
+              name,
+              reBasic,
+              reAppearance,
+              reSkills,
+              reMeasurements
+            );
+            return { kind: "role" as const, value: enrichRole(role) };
+          } else {
+            const v = await ai.extractVacancy(text, name, reprocessVacancyPrompt);
+            return { kind: "vacancy" as const, value: v };
+          }
+        })
+      );
+
+      for (let i = 0; i < reResults.length; i++) {
+        const r = reResults[i];
+        if (r.status === "fulfilled") {
+          if (r.value.kind === "role") roles.push(r.value.value);
+          else vacancies.push(r.value.value);
         } else {
-          vacancies.push(await ai.extractVacancy(text, name, reprocessVacancyPrompt));
+          console.error(`Failed to extract ${itemNames[i]}:`, r.reason);
         }
       }
 

@@ -5,6 +5,7 @@ import path from "path";
 import { app } from "electron";
 import { dbAll, dbGet, dbRun } from "../db/sqlite";
 import { processMessage, logEvent } from "./pipeline.service";
+import { runWithConcurrency } from "./concurrency";
 
 let client: ReturnType<typeof tdl.createClient> | null = null;
 let authState: string = "idle";
@@ -255,13 +256,17 @@ export function registerTdlibHandlers(): void {
     }
   );
 
-  // History sync — fetches messages from newest to oldest, stops at collect_from_date
+  // History sync — fetches messages from newest to oldest, stops at collect_from_date.
+  // Within each fetched page, messages are processed concurrently (HISTORY_CONCURRENCY)
+  // because the pipeline is mostly waiting on OpenAI. The global semaphore in
+  // openai.provider.ts caps total in-flight AI calls so we don't overrun rate limits.
   ipcMain.handle("tdlib:sync-history", async (_e, id: number) => {
     if (!client || authState !== "ready") return { synced: 0 };
 
     const chat = dbGet("SELECT * FROM monitored_chats WHERE id = ?", [id]);
     if (!chat) return { synced: 0 };
 
+    const HISTORY_CONCURRENCY = 5;
     let synced = 0;
     let fromMsgId = 0;
     let reachedDateLimit = false;
@@ -290,22 +295,23 @@ export function registerTdlibHandlers(): void {
 
       if (!history.messages || history.messages.length === 0) break;
 
+      const fromDate = chat.collect_from_date ? new Date(chat.collect_from_date) : null;
+      const tasks: Array<() => Promise<void>> = [];
+
       for (const msg of history.messages) {
         if (!msg) continue;
 
-        if (chat.collect_from_date) {
-          const msgDate = new Date(msg.date * 1000);
-          const fromDate = new Date(chat.collect_from_date);
-          if (msgDate < fromDate) {
-            reachedDateLimit = true;
-            break;
-          }
+        if (fromDate && new Date(msg.date * 1000) < fromDate) {
+          reachedDateLimit = true;
+          break;
         }
 
         const text = extractText(msg);
+        fromMsgId = msg.id;
+
         if (text && text.length >= 20) {
-          try {
-            await processMessage({
+          tasks.push(() =>
+            processMessage({
               chatId: chat.chat_id,
               messageId: msg.id,
               threadId: msg.message_thread_id ?? null,
@@ -313,14 +319,15 @@ export function registerTdlibHandlers(): void {
               date: msg.date,
               senderUserId: msg.sender_id?.user_id || null,
               forwardInfo: msg.forward_info || null,
-            });
-            synced++;
-          } catch (err) {
-            console.error("Pipeline error during sync:", err);
-          }
+            })
+          );
         }
+      }
 
-        fromMsgId = msg.id;
+      const results = await runWithConcurrency(tasks, HISTORY_CONCURRENCY);
+      for (const r of results) {
+        if (r.status === "fulfilled") synced++;
+        else console.error("Pipeline error during sync:", r.reason);
       }
     }
 

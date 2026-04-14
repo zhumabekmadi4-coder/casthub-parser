@@ -109,9 +109,17 @@ export default function Settings() {
     relevance_check: "Проверка релевантности",
     extract_meta: "Извлечение метаданных",
     count_items: "Подсчёт ролей/вакансий",
-    extract_role: "Извлечение роли",
+    extract_role_basic: "Роль · базовая инфо (имя, пол, возраст, описание, оплата)",
+    extract_role_appearance: "Роль · внешность (тип, телосложение, волосы, глаза, лицо)",
+    extract_role_skills: "Роль · навыки (языки, актёрское образование)",
+    extract_role_measurements: "Роль · измерения (рост, вес, объёмы)",
     extract_vacancy: "Извлечение вакансии",
   };
+
+  // extract_role is the legacy single-prompt version, kept in DB for rollback
+  // but not used by the pipeline since the role extraction was split into 4
+  // sub-calls. Hide it from the UI to avoid confusion.
+  const visiblePrompts = prompts.filter((p) => p.key !== "extract_role");
 
   return (
     <div className="p-6 max-w-3xl">
@@ -356,7 +364,7 @@ export default function Settings() {
           Промпты ИИ
         </h3>
         <div className="space-y-2">
-          {prompts.map((prompt) => (
+          {visiblePrompts.map((prompt) => (
             <div
               key={prompt.key}
               className="rounded-lg border border-gray-200 bg-white"

@@ -10,30 +10,47 @@ export interface ExtractedMeta {
   title: string;
 }
 
-export interface ExtractedRole {
+// Role extraction is split into 4 independent sub-calls to keep each prompt
+// small (only the relevant slice of the reference dictionary) and to allow
+// the sub-calls to run in parallel for one role.
+export interface ExtractedRoleBasic {
   name: string;
   gender: "male" | "female" | "other" | "any";
   type: "lead" | "episodic" | "background";
-  ageMin?: number;
-  ageMax?: number;
-  heightMin?: number;
-  heightMax?: number;
-  weightMin?: number;
-  weightMax?: number;
-  bust?: number;
-  waist?: number;
-  hips?: number;
-  languages?: string[];
-  appearanceType?: string;
-  bodyType?: string;
-  hairColor?: string;
-  hairType?: string;
-  eyeColor?: string;
-  faceType?: string;
-  actingEducation?: string;
-  description?: string;
-  payment?: string;
+  ageMin?: number | null;
+  ageMax?: number | null;
+  description?: string | null;
+  payment?: string | null;
 }
+
+export interface ExtractedRoleAppearance {
+  appearanceType?: string | null;
+  bodyType?: string | null;
+  hairColor?: string | null;
+  hairType?: string | null;
+  eyeColor?: string | null;
+  faceType?: string | null;
+}
+
+export interface ExtractedRoleSkills {
+  languages?: string[] | null;
+  actingEducation?: string | null;
+}
+
+export interface ExtractedRoleMeasurements {
+  heightMin?: number | null;
+  heightMax?: number | null;
+  weightMin?: number | null;
+  weightMax?: number | null;
+  bust?: number | null;
+  waist?: number | null;
+  hips?: number | null;
+}
+
+export type ExtractedRole = ExtractedRoleBasic &
+  ExtractedRoleAppearance &
+  ExtractedRoleSkills &
+  ExtractedRoleMeasurements;
 
 export interface ExtractedVacancy {
   professionName: string;
@@ -50,6 +67,9 @@ export interface AiProvider {
   checkRelevance(text: string, prompt: string): Promise<"casting" | "technical" | "skip">;
   extractMeta(text: string, type: string, prompt: string): Promise<ExtractedMeta>;
   countItems(text: string, type: string, prompt: string): Promise<string[]>;
-  extractRole(text: string, roleName: string, prompt: string): Promise<ExtractedRole>;
+  extractRoleBasic(text: string, roleName: string, prompt: string): Promise<ExtractedRoleBasic>;
+  extractRoleAppearance(text: string, roleName: string, prompt: string): Promise<ExtractedRoleAppearance>;
+  extractRoleSkills(text: string, roleName: string, prompt: string): Promise<ExtractedRoleSkills>;
+  extractRoleMeasurements(text: string, roleName: string, prompt: string): Promise<ExtractedRoleMeasurements>;
   extractVacancy(text: string, vacancyName: string, prompt: string): Promise<ExtractedVacancy>;
 }
