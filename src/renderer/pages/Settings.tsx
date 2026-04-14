@@ -386,6 +386,15 @@ export default function Settings() {
               </div>
               {editingPrompt === prompt.key && (
                 <div className="border-t border-gray-200 p-3">
+                  <p className="mb-1 text-[10px] text-gray-500 leading-relaxed">
+                    Доступные токены: <code>{"{nowDate}"}</code> — сегодняшняя дата (YYYY-MM-DD),
+                    универсально для всех промптов. Также: <code>{"{roleName}"}</code> (role-промпты),
+                    <code>{"{professionsList}"}</code> (extract_vacancy),
+                    <code>{"{appearanceTypesList}"}</code>, <code>{"{bodyTypesList}"}</code>,
+                    <code>{"{hairColorsList}"}</code>, <code>{"{hairTypesList}"}</code>,
+                    <code>{"{eyeColorsList}"}</code>, <code>{"{faceTypesList}"}</code>,
+                    <code>{"{languagesList}"}</code>, <code>{"{actingEducationList}"}</code>.
+                  </p>
                   <textarea
                     value={prompt.system_prompt}
                     onChange={(e) =>

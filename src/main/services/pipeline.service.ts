@@ -40,7 +40,9 @@ export function logEvent(event: any) {
 
 function getPrompt(key: string): string {
   const row = dbGet("SELECT system_prompt FROM prompts WHERE key = ?", [key]);
-  return row?.system_prompt ?? "";
+  const raw: string = row?.system_prompt ?? "";
+  const today = new Date().toISOString().split("T")[0];
+  return raw.replace(/\{nowDate\}/g, today);
 }
 
 function getSetting(key: string): string {

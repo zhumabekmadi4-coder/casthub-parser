@@ -101,8 +101,7 @@ export class OpenAIProvider implements AiProvider {
     type: string,
     prompt: string
   ): Promise<ExtractedMeta> {
-    const today = new Date().toISOString().split("T")[0];
-    const result = await this.chat("meta", prompt, `Type: ${type}\nToday: ${today}\n\n${text}`, true);
+    const result = await this.chat("meta", prompt, `Type: ${type}\n\n${text}`, true);
     return this.parseJson<ExtractedMeta>(result);
   }
 
