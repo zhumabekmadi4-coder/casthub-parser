@@ -148,7 +148,9 @@ function enrichRole(role: ExtractedRole): any {
     hairTypeId: role.hairType ? resolveHairType(role.hairType) : null,
     eyeColorId: role.eyeColor ? resolveEyeColor(role.eyeColor) : null,
     faceTypeId: role.faceType ? resolveFaceType(role.faceType) : null,
-    actingEducationId: role.actingEducation ? resolveActingEducation(role.actingEducation) : null,
+    actingEducationIds: role.actingEducation
+      ? [resolveActingEducation(role.actingEducation)].filter((id): id is string => !!id)
+      : [],
     languageIds: role.languages?.length
       ? role.languages.map((c) => resolveLanguage(c)).filter((id): id is string => !!id)
       : undefined,
