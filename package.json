@@ -1,6 +1,6 @@
 {
   "name": "casthub-parser",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Telegram parser for CastHub.kz — collects casting/job announcements",
   "main": "dist/main/index.js",
   "scripts": {
