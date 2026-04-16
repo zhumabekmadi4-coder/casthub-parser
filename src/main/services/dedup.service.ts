@@ -1,13 +1,19 @@
 import { createHash } from "crypto";
 import { dbGet, dbRun } from "../db/sqlite";
 
+// Comprehensive emoji + symbol removal covering all Unicode emoji blocks:
+// Emoticons, Dingbats, Symbols, Transport, Misc, Flags, Modifiers,
+// Variation selectors, ZWJ sequences, keycap sequences
+const EMOJI_REGEX =
+  /[\u{200D}\u{FE0F}\u{20E3}\u{2000}-\u{206F}\u{2300}-\u{23FF}\u{2600}-\u{27BF}\u{2B50}\u{2B55}\u{2934}-\u{2935}\u{3030}\u{303D}\u{3297}\u{3299}\u{1F000}-\u{1FAFF}\u{E0020}-\u{E007F}]/gu;
+
 function normalizeText(text: string): string {
   return text
     .toLowerCase()
     .replace(/https?:\/\/\S+/g, "")
     .replace(/@\w+/g, "")
     .replace(/\+?\d[\d\s()-]{7,}/g, "")
-    .replace(/[\u{1F600}-\u{1F6FF}]/gu, "")
+    .replace(EMOJI_REGEX, "")
     .replace(/\s+/g, " ")
     .trim();
 }
