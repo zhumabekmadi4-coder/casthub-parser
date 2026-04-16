@@ -149,7 +149,7 @@ export function getProfessionsCache() {
 
 // ============ Delivery loop ============
 
-async function deliverItem(item: any): Promise<{ ok: boolean; error?: string; projectId?: string }> {
+async function deliverSingleItem(item: any): Promise<{ ok: boolean; error?: string; projectId?: string }> {
   const apiUrl = getSetting("casthub_api_url");
   const apiKey = getSetting("casthub_api_key");
 
@@ -187,45 +187,102 @@ async function deliverItem(item: any): Promise<{ ok: boolean; error?: string; pr
 
 async function deliveryLoop(): Promise<{ delivered: number; failed: number }> {
   const items = dbAll(
-    "SELECT * FROM import_queue WHERE status = 'pending' AND retry_count < 5 ORDER BY created_at ASC LIMIT 10"
+    "SELECT * FROM import_queue WHERE status = 'pending' AND retry_count < 5 ORDER BY created_at ASC LIMIT 20"
   );
+
+  if (!items.length) return { delivered: 0, failed: 0 };
+
+  const apiUrl = getSetting("casthub_api_url");
+  const apiKey = getSetting("casthub_api_key");
+
+  if (!apiUrl || !apiKey) {
+    logEvent({ type: "error", error: "CastHub API not configured" });
+    return { delivered: 0, failed: 0 };
+  }
+
+  const payloads = items.map((item: any) => ({
+    item,
+    parsed: JSON.parse(item.parsed_data),
+  }));
 
   let delivered = 0;
   let failed = 0;
 
-  for (const item of items) {
-    const result = await deliverItem(item);
+  try {
+    const response = await fetch(`${apiUrl}/api/import/batch`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({ items: payloads.map((p) => p.parsed) }),
+    });
 
-    if (result.ok) {
-      dbRun(
-        "UPDATE import_queue SET status = 'delivered', casthub_project_id = ?, delivered_at = datetime('now') WHERE id = ?",
-        [result.projectId, item.id]
+    if (!response.ok) {
+      const body = await response.text();
+      const error = `Batch HTTP ${response.status}: ${body}`;
+      for (const { item } of payloads) {
+        const retryCount = item.retry_count + 1;
+        dbRun(
+          "UPDATE import_queue SET status = ?, error = ?, retry_count = ? WHERE id = ?",
+          [retryCount >= 5 ? "failed" : "pending", error, retryCount, item.id]
+        );
+        failed++;
+      }
+      logEvent({ type: "error", error });
+      return { delivered, failed };
+    }
+
+    const result = await response.json();
+
+    for (const { item, parsed } of payloads) {
+      const itemResult = result.results?.find(
+        (r: any) => r.externalId === parsed.externalId
       );
-      delivered++;
 
-      logEvent({
-        type: "delivered",
-        title: JSON.parse(item.parsed_data).title,
-        projectId: result.projectId,
-      });
-    } else {
-      const retryCount = item.retry_count + 1;
-      const status = retryCount >= 5 ? "failed" : "pending";
-      dbRun(
-        "UPDATE import_queue SET status = ?, error = ?, retry_count = ? WHERE id = ?",
-        [status, result.error, retryCount, item.id]
-      );
-      failed++;
+      if (!itemResult) {
+        dbRun(
+          "UPDATE import_queue SET status = 'pending', error = 'Missing from batch response', retry_count = retry_count + 1 WHERE id = ?",
+          [item.id]
+        );
+        failed++;
+        continue;
+      }
 
-      if (status === "failed") {
+      if (itemResult.status === "error") {
+        const retryCount = item.retry_count + 1;
+        dbRun(
+          "UPDATE import_queue SET status = ?, error = ?, retry_count = ? WHERE id = ?",
+          [retryCount >= 5 ? "failed" : "pending", itemResult.error || "Server error", retryCount, item.id]
+        );
+        failed++;
+        if (retryCount >= 5) {
+          logEvent({ type: "error", error: `Delivery failed after 5 retries: ${itemResult.error}` });
+        }
+      } else {
+        dbRun(
+          "UPDATE import_queue SET status = 'delivered', casthub_project_id = ?, delivered_at = datetime('now') WHERE id = ?",
+          [itemResult.id || "duplicate", item.id]
+        );
+        delivered++;
         logEvent({
-          type: "error",
-          error: `Delivery failed after 5 retries: ${result.error}`,
+          type: "delivered",
+          title: parsed.title,
+          projectId: itemResult.id,
         });
       }
     }
-
-    await new Promise((r) => setTimeout(r, 500));
+  } catch (err) {
+    const error = String(err);
+    for (const { item } of payloads) {
+      const retryCount = item.retry_count + 1;
+      dbRun(
+        "UPDATE import_queue SET status = ?, error = ?, retry_count = ? WHERE id = ?",
+        [retryCount >= 5 ? "failed" : "pending", error, retryCount, item.id]
+      );
+      failed++;
+    }
+    logEvent({ type: "error", error: `Batch delivery error: ${error}` });
   }
 
   return { delivered, failed };
