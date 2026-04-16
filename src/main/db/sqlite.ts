@@ -391,10 +391,12 @@ Only return valid JSON.`,
     ],
   ];
 
-  // Use INSERT OR REPLACE to update prompts on schema changes
+  // INSERT OR IGNORE — user-edited prompts survive app restarts.
+  // To force-update a default prompt after a schema change, bump the key name
+  // (e.g. "classify_v2") or add a one-time migration that deletes the old key.
   for (const [key, prompt] of defaultPrompts) {
     db.run(
-      "INSERT OR REPLACE INTO prompts (key, system_prompt, updated_at) VALUES (?, ?, datetime('now'))",
+      "INSERT OR IGNORE INTO prompts (key, system_prompt, updated_at) VALUES (?, ?, datetime('now'))",
       [key, prompt]
     );
   }
