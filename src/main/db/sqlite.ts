@@ -412,4 +412,11 @@ Only return valid JSON.`,
 
   // Cleanup legacy prompt key (split into count_roles + count_vacancies).
   db.run("DELETE FROM prompts WHERE key = 'count_items'");
+
+  // Migration: add next_retry_at column for exponential backoff
+  const queueCols = db.exec("PRAGMA table_info(import_queue)");
+  const queueColNames = queueCols[0]?.values.map((row: any) => row[1] as string) || [];
+  if (!queueColNames.includes("next_retry_at")) {
+    db.run("ALTER TABLE import_queue ADD COLUMN next_retry_at TEXT");
+  }
 }

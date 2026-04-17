@@ -2,6 +2,11 @@ import { ipcMain, BrowserWindow } from "electron";
 import { dbAll, dbGet, dbRun } from "../db/sqlite";
 import { logEvent } from "./pipeline.service";
 
+function backoffSeconds(retryCount: number): number {
+  // 30s, 120s, 480s, 1920s (roughly 30s, 2min, 8min, 32min)
+  return 30 * Math.pow(4, retryCount);
+}
+
 function getSetting(key: string): string {
   const row = dbGet("SELECT value FROM settings WHERE key = ?", [key]);
   return row?.value ?? "";
@@ -187,7 +192,10 @@ async function deliverSingleItem(item: any): Promise<{ ok: boolean; error?: stri
 
 async function deliveryLoop(): Promise<{ delivered: number; failed: number }> {
   const items = dbAll(
-    "SELECT * FROM import_queue WHERE status = 'pending' AND retry_count < 5 ORDER BY created_at ASC LIMIT 20"
+    `SELECT * FROM import_queue
+     WHERE status = 'pending' AND retry_count < 5
+       AND (next_retry_at IS NULL OR next_retry_at <= datetime('now'))
+     ORDER BY created_at ASC LIMIT 20`
   );
 
   if (!items.length) return { delivered: 0, failed: 0 };
@@ -223,9 +231,12 @@ async function deliveryLoop(): Promise<{ delivered: number; failed: number }> {
       const error = `Batch HTTP ${response.status}: ${body}`;
       for (const { item } of payloads) {
         const retryCount = item.retry_count + 1;
+        const nextRetry = retryCount < 5
+          ? new Date(Date.now() + backoffSeconds(retryCount) * 1000).toISOString()
+          : null;
         dbRun(
-          "UPDATE import_queue SET status = ?, error = ?, retry_count = ? WHERE id = ?",
-          [retryCount >= 5 ? "failed" : "pending", error, retryCount, item.id]
+          "UPDATE import_queue SET status = ?, error = ?, retry_count = ?, next_retry_at = ? WHERE id = ?",
+          [retryCount >= 5 ? "failed" : "pending", error, retryCount, nextRetry, item.id]
         );
         failed++;
       }
@@ -241,9 +252,13 @@ async function deliveryLoop(): Promise<{ delivered: number; failed: number }> {
       );
 
       if (!itemResult) {
+        const retryCount = item.retry_count + 1;
+        const nextRetry = retryCount < 5
+          ? new Date(Date.now() + backoffSeconds(retryCount) * 1000).toISOString()
+          : null;
         dbRun(
-          "UPDATE import_queue SET status = 'pending', error = 'Missing from batch response', retry_count = retry_count + 1 WHERE id = ?",
-          [item.id]
+          "UPDATE import_queue SET status = ?, error = ?, retry_count = ?, next_retry_at = ? WHERE id = ?",
+          [retryCount >= 5 ? "failed" : "pending", "Missing from batch response", retryCount, nextRetry, item.id]
         );
         failed++;
         continue;
@@ -251,9 +266,12 @@ async function deliveryLoop(): Promise<{ delivered: number; failed: number }> {
 
       if (itemResult.status === "error") {
         const retryCount = item.retry_count + 1;
+        const nextRetry = retryCount < 5
+          ? new Date(Date.now() + backoffSeconds(retryCount) * 1000).toISOString()
+          : null;
         dbRun(
-          "UPDATE import_queue SET status = ?, error = ?, retry_count = ? WHERE id = ?",
-          [retryCount >= 5 ? "failed" : "pending", itemResult.error || "Server error", retryCount, item.id]
+          "UPDATE import_queue SET status = ?, error = ?, retry_count = ?, next_retry_at = ? WHERE id = ?",
+          [retryCount >= 5 ? "failed" : "pending", itemResult.error || "Server error", retryCount, nextRetry, item.id]
         );
         failed++;
         if (retryCount >= 5) {
@@ -276,9 +294,12 @@ async function deliveryLoop(): Promise<{ delivered: number; failed: number }> {
     const error = String(err);
     for (const { item } of payloads) {
       const retryCount = item.retry_count + 1;
+      const nextRetry = retryCount < 5
+        ? new Date(Date.now() + backoffSeconds(retryCount) * 1000).toISOString()
+        : null;
       dbRun(
-        "UPDATE import_queue SET status = ?, error = ?, retry_count = ? WHERE id = ?",
-        [retryCount >= 5 ? "failed" : "pending", error, retryCount, item.id]
+        "UPDATE import_queue SET status = ?, error = ?, retry_count = ?, next_retry_at = ? WHERE id = ?",
+        [retryCount >= 5 ? "failed" : "pending", error, retryCount, nextRetry, item.id]
       );
       failed++;
     }
