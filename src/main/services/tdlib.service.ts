@@ -475,6 +475,57 @@ function startMessageListener() {
         imagePath,
       }).catch((err) => console.error("Pipeline error:", err));
     }
+
+    if (update._ === "updateMessageContent") {
+      const chatId = update.chat_id;
+      const messageId = update.message_id;
+
+      if (!monitoredChats.has(chatId)) return;
+
+      const { removeProcessed } = require("./dedup.service");
+      const wasProcessed = removeProcessed(chatId, messageId);
+      if (!wasProcessed) return;
+
+      try {
+        const msg = await client!.invoke({ _: "getMessage", chat_id: chatId, message_id: messageId });
+        if (!msg) return;
+
+        const threadId = msg.message_thread_id ?? null;
+        if (!isMonitoredMessage(chatId, threadId)) return;
+
+        const { text, photoFileId } = extractContent(msg);
+        if ((!text || text.length < 20) && !photoFileId) return;
+
+        let imagePath: string | null = null;
+        if (photoFileId && client) {
+          try {
+            const file = await client.invoke({ _: "downloadFile", file_id: photoFileId, priority: 1, synchronous: true });
+            if (file?.local?.path) imagePath = file.local.path;
+          } catch {}
+        }
+
+        logEvent({ type: "incoming", chatId, messageId, threadId, textLength: text?.length ?? 0, edited: true });
+
+        const { externalIdHash } = require("./dedup.service");
+        dbRun(
+          "DELETE FROM import_queue WHERE content_hash = ? AND status IN ('pending', 'review', 'ai_failed')",
+          [externalIdHash(chatId, messageId)]
+        );
+
+        processMessage({
+          chatId,
+          messageId: msg.id,
+          threadId,
+          text: text || "",
+          date: msg.date,
+          senderUserId: msg.sender_id?.user_id || null,
+          forwardInfo: msg.forward_info || null,
+          imagePath,
+        }).catch((err) => console.error("Pipeline error (edit):", err));
+      } catch (err) {
+        console.error("Failed to handle message edit:", err);
+      }
+    }
   };
 
   client.on("update", messageHandler);

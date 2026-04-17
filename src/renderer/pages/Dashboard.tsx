@@ -110,7 +110,7 @@ export default function Dashboard() {
                 <span className="text-gray-400 shrink-0">{(ev as any)._time}</span>
                 <span className="text-gray-700">
                   {ev.type === "incoming" && (
-                    <>Входящее сообщение ({ev.textLength} симв.)</>
+                    <>Входящее сообщение ({ev.textLength} симв.){ev.edited ? " (ред.)" : ""}</>
                   )}
                   {ev.type === "processed" && (
                     <>

@@ -75,6 +75,16 @@ export function markProcessed(
   );
 }
 
+export function removeProcessed(chatId: number, messageId: number): boolean {
+  const existing = dbGet(
+    "SELECT id FROM processed_messages WHERE chat_id = ? AND message_id = ?",
+    [chatId, messageId]
+  );
+  if (!existing) return false;
+  dbRun("DELETE FROM processed_messages WHERE chat_id = ? AND message_id = ?", [chatId, messageId]);
+  return true;
+}
+
 export function cleanOldEntries(days: number): number {
   const { getDb } = require("../db/sqlite");
   const db = getDb();
