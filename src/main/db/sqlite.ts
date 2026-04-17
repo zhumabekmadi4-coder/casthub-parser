@@ -176,6 +176,16 @@ function runMigrations(): void {
     )
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS blocked_senders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL UNIQUE,
+      username TEXT,
+      reason TEXT,
+      blocked_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+
   // Insert default settings if not exist
   const defaults: [string, string][] = [
     ["casthub_api_url", "https://app.casthub.kz"],

@@ -60,6 +60,12 @@ const api = {
       ipcRenderer.invoke("tdlib:get-chat-stats", chatId),
     getAllChatStats: () =>
       ipcRenderer.invoke("tdlib:get-all-chat-stats"),
+    blockSender: (userId: number, username?: string, reason?: string) =>
+      ipcRenderer.invoke("tdlib:block-sender", userId, username, reason),
+    unblockSender: (userId: number) =>
+      ipcRenderer.invoke("tdlib:unblock-sender", userId),
+    getBlockedSenders: () =>
+      ipcRenderer.invoke("tdlib:get-blocked-senders"),
   },
 
   // Pipeline

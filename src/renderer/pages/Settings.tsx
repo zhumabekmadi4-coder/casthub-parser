@@ -32,6 +32,9 @@ export default function Settings() {
   const [editingPrompt, setEditingPrompt] = useState<string | null>(null);
   const [dictStatus, setDictStatus] = useState<DictStatus | null>(null);
   const [reloadingDict, setReloadingDict] = useState(false);
+  const [blockedSenders, setBlockedSenders] = useState<any[]>([]);
+  const [newBlockId, setNewBlockId] = useState("");
+  const [newBlockReason, setNewBlockReason] = useState("");
 
   useEffect(() => {
     window.api.settings.getAll().then((s) => {
@@ -40,6 +43,7 @@ export default function Settings() {
     });
     window.api.prompts.getAll().then(setPrompts);
     window.api.dictionaries.getStatus().then(setDictStatus);
+    window.api.tdlib.getBlockedSenders().then(setBlockedSenders);
 
     const unsub = window.api.on("dictionaries:status", (status: DictStatus) => {
       setDictStatus(status);
@@ -115,6 +119,20 @@ export default function Settings() {
     extract_role_skills: "Роль · навыки (языки, актёрское образование)",
     extract_role_measurements: "Роль · измерения (рост, вес, объёмы)",
     extract_vacancy: "Извлечение вакансии",
+  };
+
+  const handleBlockSender = async () => {
+    const userId = parseInt(newBlockId);
+    if (!userId) return;
+    await window.api.tdlib.blockSender(userId, undefined, newBlockReason || undefined);
+    setNewBlockId("");
+    setNewBlockReason("");
+    window.api.tdlib.getBlockedSenders().then(setBlockedSenders);
+  };
+
+  const handleUnblockSender = async (userId: number) => {
+    await window.api.tdlib.unblockSender(userId);
+    window.api.tdlib.getBlockedSenders().then(setBlockedSenders);
   };
 
   // extract_role is the legacy single-prompt version, kept in DB for rollback
@@ -356,6 +374,66 @@ export default function Settings() {
             onChange={(v) => updateDraft("dedup_cache_days", v)}
             type="number"
           />
+        </div>
+      </section>
+
+      {/* Blocked Senders */}
+      <section className="mb-8">
+        <h3 className="font-semibold text-sm text-gray-500 uppercase tracking-wide mb-3">
+          Заблокированные отправители
+        </h3>
+        <div className="rounded-lg border border-gray-200 bg-white p-3 space-y-3">
+          <div className="flex gap-2">
+            <input
+              type="number"
+              value={newBlockId}
+              onChange={(e) => setNewBlockId(e.target.value)}
+              placeholder="User ID"
+              className="w-36 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+            <input
+              type="text"
+              value={newBlockReason}
+              onChange={(e) => setNewBlockReason(e.target.value)}
+              placeholder="Причина (опционально)"
+              className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            />
+            <button
+              onClick={handleBlockSender}
+              disabled={!newBlockId}
+              className="rounded-lg bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Заблокировать
+            </button>
+          </div>
+          {blockedSenders.length === 0 ? (
+            <p className="text-sm text-gray-500">Нет заблокированных отправителей</p>
+          ) : (
+            <div className="space-y-1.5">
+              {blockedSenders.map((s) => (
+                <div
+                  key={s.user_id}
+                  className="flex items-center justify-between rounded border border-gray-100 px-3 py-2 text-sm"
+                >
+                  <div>
+                    <span className="font-medium">{s.user_id}</span>
+                    {s.username && (
+                      <span className="text-gray-500 ml-2">{s.username}</span>
+                    )}
+                    {s.reason && (
+                      <span className="text-gray-400 ml-2">— {s.reason}</span>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => handleUnblockSender(s.user_id)}
+                    className="text-xs text-blue-600 hover:text-blue-800"
+                  >
+                    Разблокировать
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </section>
 

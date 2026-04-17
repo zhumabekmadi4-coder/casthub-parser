@@ -384,6 +384,23 @@ export function registerTdlibHandlers(): void {
     return { synced };
   });
 
+  ipcMain.handle("tdlib:block-sender", (_e, userId: number, username?: string, reason?: string) => {
+    dbRun(
+      "INSERT OR IGNORE INTO blocked_senders (user_id, username, reason) VALUES (?, ?, ?)",
+      [userId, username || null, reason || null]
+    );
+    return true;
+  });
+
+  ipcMain.handle("tdlib:unblock-sender", (_e, userId: number) => {
+    dbRun("DELETE FROM blocked_senders WHERE user_id = ?", [userId]);
+    return true;
+  });
+
+  ipcMain.handle("tdlib:get-blocked-senders", () => {
+    return dbAll("SELECT * FROM blocked_senders ORDER BY blocked_at DESC");
+  });
+
   ipcMain.handle("tdlib:get-username", async (_e, userId: number) => {
     if (!client) return null;
     try {
@@ -423,6 +440,15 @@ function startMessageListener() {
       if (!msg) return;
       const threadId = msg.message_thread_id ?? null;
       if (!isMonitoredMessage(msg.chat_id, threadId)) return;
+
+      const senderUserId = msg.sender_id?.user_id || null;
+      if (senderUserId) {
+        const blocked = dbGet("SELECT id FROM blocked_senders WHERE user_id = ?", [senderUserId]);
+        if (blocked) {
+          logEvent({ type: "skipped", reason: "blocked_sender", chatId: msg.chat_id, messageId: msg.id });
+          return;
+        }
+      }
 
       const { text, photoFileId } = extractContent(msg);
       logEvent({
