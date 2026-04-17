@@ -56,6 +56,10 @@ const api = {
       ipcRenderer.invoke("tdlib:sync-history", id),
     getUsername: (userId: number) =>
       ipcRenderer.invoke("tdlib:get-username", userId),
+    getChatStats: (chatId: number) =>
+      ipcRenderer.invoke("tdlib:get-chat-stats", chatId),
+    getAllChatStats: () =>
+      ipcRenderer.invoke("tdlib:get-all-chat-stats"),
   },
 
   // Pipeline

@@ -26,6 +26,7 @@ interface ForumTopic {
 export default function ChatManager() {
   const [authState, setAuthState] = useState("idle");
   const [monitoredChats, setMonitoredChats] = useState<MonitoredChat[]>([]);
+  const [chatStats, setChatStats] = useState<Record<number, Record<string, number>>>({});
   const [availableChats, setAvailableChats] = useState<TelegramChat[]>([]);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -61,6 +62,7 @@ export default function ChatManager() {
 
   const loadMonitoredChats = () => {
     window.api.tdlib.getMonitoredChats().then(setMonitoredChats);
+    window.api.tdlib.getAllChatStats().then(setChatStats);
   };
 
   const handleConnect = async () => {
@@ -153,6 +155,16 @@ export default function ChatManager() {
     const result = await window.api.tdlib.syncHistory(id);
     alert(`Синхронизировано ${result.synced} сообщений`);
   };
+
+  // Sets for marking already-added chats/topics in the add dialog
+  const monitoredChatIds = new Set(monitoredChats.map((c) => c.chat_id));
+  const monitoredTopicKeys = new Set(
+    monitoredChats
+      .filter((c) => c.thread_id !== null)
+      .map((c) => `${c.chat_id}:${c.thread_id}`)
+  );
+  const isWholeMonitored = (chatId: number) =>
+    monitoredChats.some((c) => c.chat_id === chatId && c.thread_id === null);
 
   const filteredChats = availableChats.filter((c) =>
     c.title.toLowerCase().includes(searchQuery.toLowerCase())
@@ -331,6 +343,17 @@ export default function ChatManager() {
                   {chat.last_processed_message_id &&
                     ` · Последний ID: ${chat.last_processed_message_id}`}
                 </p>
+                {(() => {
+                  const s = chatStats[chat.chat_id];
+                  if (!s) return null;
+                  return (
+                    <p className="text-[11px] text-gray-400 flex gap-2">
+                      {s.processed ? <span className="text-green-600">{s.processed} обработано</span> : null}
+                      {s.skipped ? <span className="text-gray-400">{s.skipped} пропущено</span> : null}
+                      {s.errors ? <span className="text-red-500">{s.errors} ошибок</span> : null}
+                    </p>
+                  );
+                })()}
               </div>
 
               <div className="flex items-center gap-2">
@@ -386,20 +409,41 @@ export default function ChatManager() {
                 />
 
                 <div className="max-h-80 overflow-y-auto space-y-1">
-                  {filteredChats.map((chat) => (
-                    <button
-                      key={chat.id}
-                      onClick={() => selectChat(chat)}
-                      className="w-full text-left rounded-lg px-3 py-2 text-sm hover:bg-blue-50"
-                    >
-                      <span className="font-medium">{chat.title}</span>
-                      {chat.isForum && (
-                        <span className="ml-2 text-[10px] text-blue-600">
-                          (форум)
+                  {filteredChats.map((chat) => {
+                    const added = !chat.isForum && monitoredChatIds.has(chat.id);
+                    const partiallyAdded = chat.isForum && monitoredChatIds.has(chat.id);
+                    return (
+                      <button
+                        key={chat.id}
+                        onClick={() => !added && selectChat(chat)}
+                        className={`w-full text-left rounded-lg px-3 py-2 text-sm flex items-center justify-between ${
+                          added
+                            ? "bg-green-50 text-green-700 cursor-default"
+                            : "hover:bg-blue-50"
+                        }`}
+                        disabled={added}
+                      >
+                        <span>
+                          <span className="font-medium">{chat.title}</span>
+                          {chat.isForum && (
+                            <span className="ml-2 text-[10px] text-blue-600">
+                              (форум)
+                            </span>
+                          )}
                         </span>
-                      )}
-                    </button>
-                  ))}
+                        {added && (
+                          <span className="text-[10px] text-green-600 whitespace-nowrap ml-2">
+                            ✓ Добавлен
+                          </span>
+                        )}
+                        {partiallyAdded && (
+                          <span className="text-[10px] text-amber-600 whitespace-nowrap ml-2">
+                            частично
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
                   {filteredChats.length === 0 && (
                     <p className="text-sm text-gray-400 text-center py-4">
                       Чаты не найдены
@@ -417,25 +461,51 @@ export default function ChatManager() {
                   </p>
                 ) : (
                   <>
-                    <button
-                      onClick={subscribeWholeChat}
-                      className="w-full text-left rounded-lg px-3 py-2 text-sm hover:bg-blue-50 border border-dashed border-gray-300 mb-2"
-                    >
-                      <span className="font-medium">📢 Весь чат</span>
-                      <span className="block text-[11px] text-gray-500">
-                        Подписаться на все темы
-                      </span>
-                    </button>
-                    <div className="max-h-72 overflow-y-auto space-y-1">
-                      {topics.map((t) => (
+                    {(() => {
+                      const wholeAdded = pendingChat && isWholeMonitored(pendingChat.id);
+                      return (
                         <button
-                          key={t.threadId}
-                          onClick={() => subscribeTopic(t)}
-                          className="w-full text-left rounded-lg px-3 py-2 text-sm hover:bg-blue-50"
+                          onClick={() => !wholeAdded && subscribeWholeChat()}
+                          className={`w-full text-left rounded-lg px-3 py-2 text-sm border border-dashed mb-2 flex items-center justify-between ${
+                            wholeAdded
+                              ? "border-green-300 bg-green-50 text-green-700 cursor-default"
+                              : "border-gray-300 hover:bg-blue-50"
+                          }`}
+                          disabled={!!wholeAdded}
                         >
-                          {t.title}
+                          <span>
+                            <span className="font-medium">📢 Весь чат</span>
+                            <span className="block text-[11px] text-gray-500">
+                              Подписаться на все темы
+                            </span>
+                          </span>
+                          {wholeAdded && (
+                            <span className="text-[10px] text-green-600">✓ Добавлен</span>
+                          )}
                         </button>
-                      ))}
+                      );
+                    })()}
+                    <div className="max-h-72 overflow-y-auto space-y-1">
+                      {topics.map((t) => {
+                        const topicAdded = pendingChat && monitoredTopicKeys.has(`${pendingChat.id}:${t.threadId}`);
+                        return (
+                          <button
+                            key={t.threadId}
+                            onClick={() => !topicAdded && subscribeTopic(t)}
+                            className={`w-full text-left rounded-lg px-3 py-2 text-sm flex items-center justify-between ${
+                              topicAdded
+                                ? "bg-green-50 text-green-700 cursor-default"
+                                : "hover:bg-blue-50"
+                            }`}
+                            disabled={!!topicAdded}
+                          >
+                            <span>{t.title}</span>
+                            {topicAdded && (
+                              <span className="text-[10px] text-green-600">✓ Добавлена</span>
+                            )}
+                          </button>
+                        );
+                      })}
                       {topics.length === 0 && (
                         <p className="text-sm text-gray-400 text-center py-4">
                           Темы не найдены

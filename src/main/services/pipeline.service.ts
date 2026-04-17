@@ -38,6 +38,14 @@ export function logEvent(event: any) {
   sendToRenderer("pipeline:event", entry);
 }
 
+function incrementChatStat(chatId: number, statType: string) {
+  dbRun(
+    `INSERT INTO chat_stats (chat_id, stat_type, count) VALUES (?, ?, 1)
+     ON CONFLICT(chat_id, stat_type) DO UPDATE SET count = count + 1`,
+    [chatId, statType]
+  );
+}
+
 function getPrompt(key: string): string {
   const row = dbGet("SELECT system_prompt FROM prompts WHERE key = ?", [key]);
   const raw: string = row?.system_prompt ?? "";
@@ -257,6 +265,7 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
 
   if (isDuplicate(chatId, messageId, text, forwardOrigin)) {
     logEvent({ type: "skipped", reason: "duplicate", chatId, messageId });
+    incrementChatStat(chatId, "skipped");
     return;
   }
 
@@ -268,12 +277,14 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
   } catch (err) {
     markProcessed(chatId, messageId, text, "error", forwardOrigin);
     logEvent({ type: "error", step: "relevance", error: String(err), chatId, messageId });
+    incrementChatStat(chatId, "errors");
     return;
   }
 
   if (classification === "skip") {
     markProcessed(chatId, messageId, text, "skip", forwardOrigin);
     logEvent({ type: "skipped", reason: "irrelevant", chatId, messageId, preview: text.substring(0, 80) });
+    incrementChatStat(chatId, "skipped");
     return;
   }
 
@@ -307,6 +318,7 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
   if (!finalHasContact) {
     markProcessed(chatId, messageId, text, classification, forwardOrigin);
     logEvent({ type: "skipped", reason: "no_contacts", chatId, messageId });
+    incrementChatStat(chatId, "skipped");
     return;
   }
 
@@ -377,6 +389,8 @@ export async function processMessage(msg: MessagePayload): Promise<void> {
     chatId,
     messageId,
   });
+
+  incrementChatStat(chatId, "processed");
 }
 
 function enqueueFailed(
@@ -398,6 +412,8 @@ function enqueueFailed(
     chatId,
     messageId,
   });
+
+  incrementChatStat(chatId, "errors");
 }
 
 export function registerPipelineHandlers(): void {

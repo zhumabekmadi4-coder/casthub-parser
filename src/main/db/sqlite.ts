@@ -167,6 +167,15 @@ function runMigrations(): void {
     )
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS chat_stats (
+      chat_id INTEGER NOT NULL,
+      stat_type TEXT NOT NULL,
+      count INTEGER DEFAULT 0,
+      PRIMARY KEY (chat_id, stat_type)
+    )
+  `);
+
   // Insert default settings if not exist
   const defaults: [string, string][] = [
     ["casthub_api_url", "https://app.casthub.kz"],

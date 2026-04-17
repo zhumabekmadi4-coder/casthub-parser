@@ -248,6 +248,28 @@ export function registerTdlibHandlers(): void {
     return dbAll("SELECT * FROM monitored_chats ORDER BY added_at DESC");
   });
 
+  ipcMain.handle("tdlib:get-chat-stats", (_e, chatId: number) => {
+    const rows = dbAll(
+      "SELECT stat_type, count FROM chat_stats WHERE chat_id = ?",
+      [chatId]
+    );
+    const result: Record<string, number> = {};
+    for (const row of rows as any[]) {
+      result[row.stat_type] = row.count;
+    }
+    return result;
+  });
+
+  ipcMain.handle("tdlib:get-all-chat-stats", () => {
+    const rows = dbAll("SELECT chat_id, stat_type, count FROM chat_stats");
+    const result: Record<number, Record<string, number>> = {};
+    for (const row of rows as any[]) {
+      if (!result[row.chat_id]) result[row.chat_id] = {};
+      result[row.chat_id][row.stat_type] = row.count;
+    }
+    return result;
+  });
+
   ipcMain.handle(
     "tdlib:set-collect-from",
     (_e, id: number, date: string) => {
