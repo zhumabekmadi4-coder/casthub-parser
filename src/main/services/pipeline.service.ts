@@ -92,6 +92,7 @@ export interface MessagePayload {
   date: number;
   senderUserId: number | null;
   forwardInfo: any;
+  imagePath?: string | null;
 }
 
 interface SubPipelineResult {
@@ -256,7 +257,21 @@ async function runTechnicalPipeline(
 export async function processMessage(msg: MessagePayload): Promise<void> {
   const { chatId, messageId, date, senderUserId, forwardInfo } = msg;
 
-  const text = msg.text ? sanitizeText(msg.text) : null;
+  let text = msg.text ? sanitizeText(msg.text) : null;
+
+  // If text is too short but we have an image, try OCR
+  if ((!text || text.length < 20) && msg.imagePath) {
+    try {
+      const ai = getOrCreateProvider();
+      const ocrText = await ai.extractTextFromImage(msg.imagePath);
+      if (ocrText && ocrText.length >= 20) {
+        text = sanitizeText(ocrText);
+      }
+    } catch (err) {
+      logEvent({ type: "error", step: "ocr", error: String(err), chatId, messageId });
+    }
+  }
+
   if (!text || text.length < 20) return;
 
   const forwardOrigin = forwardInfo?.origin

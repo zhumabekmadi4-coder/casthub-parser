@@ -73,4 +73,5 @@ export interface AiProvider {
   extractRoleSkills(text: string, roleName: string, prompt: string): Promise<ExtractedRoleSkills>;
   extractRoleMeasurements(text: string, roleName: string, prompt: string): Promise<ExtractedRoleMeasurements>;
   extractVacancy(text: string, vacancyName: string, prompt: string): Promise<ExtractedVacancy>;
+  extractTextFromImage(imagePath: string): Promise<string | null>;
 }

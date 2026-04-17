@@ -328,21 +328,42 @@ export function registerTdlibHandlers(): void {
           break;
         }
 
-        const text = extractText(msg);
+        const { text, photoFileId } = extractContent(msg);
         fromMsgId = msg.id;
 
-        if (text && text.length >= 20) {
-          tasks.push(() =>
-            processMessage({
+        if ((text && text.length >= 20) || photoFileId) {
+          tasks.push(async () => {
+            let imagePath: string | null = null;
+            if (photoFileId && client) {
+              try {
+                const file = await client.invoke({
+                  _: "downloadFile",
+                  file_id: photoFileId,
+                  priority: 1,
+                  synchronous: true,
+                });
+                if (file?.local?.path) {
+                  imagePath = file.local.path;
+                }
+              } catch {
+                // Photo download failed — proceed with text only
+              }
+            }
+
+            // Skip if no usable text and photo download failed
+            if ((!text || text.length < 20) && !imagePath) return;
+
+            await processMessage({
               chatId: chat.chat_id,
               messageId: msg.id,
               threadId: msg.message_thread_id ?? null,
-              text,
+              text: text || "",
               date: msg.date,
               senderUserId: msg.sender_id?.user_id || null,
               forwardInfo: msg.forward_info || null,
-            })
-          );
+              imagePath,
+            });
+          });
         }
       }
 
@@ -396,14 +417,14 @@ function loadMonitoredChats() {
 function startMessageListener() {
   if (!client || messageHandler) return;
 
-  messageHandler = (update: any) => {
+  messageHandler = async (update: any) => {
     if (update._ === "updateNewMessage") {
       const msg = update.message;
       if (!msg) return;
       const threadId = msg.message_thread_id ?? null;
       if (!isMonitoredMessage(msg.chat_id, threadId)) return;
 
-      const text = extractText(msg);
+      const { text, photoFileId } = extractContent(msg);
       logEvent({
         type: "incoming",
         chatId: msg.chat_id,
@@ -412,8 +433,25 @@ function startMessageListener() {
         textLength: text?.length ?? 0,
       });
 
-      if (!text || text.length < 20) {
-        console.log(`[TDLib] Skipped: too short`);
+      let imagePath: string | null = null;
+      if (photoFileId && client) {
+        try {
+          const file = await client.invoke({
+            _: "downloadFile",
+            file_id: photoFileId,
+            priority: 1,
+            synchronous: true,
+          });
+          if (file?.local?.path) {
+            imagePath = file.local.path;
+          }
+        } catch {
+          // Photo download failed — proceed with text only
+        }
+      }
+
+      if ((!text || text.length < 20) && !imagePath) {
+        console.log(`[TDLib] Skipped: too short and no image`);
         return;
       }
 
@@ -430,10 +468,11 @@ function startMessageListener() {
         chatId: msg.chat_id,
         messageId: msg.id,
         threadId,
-        text,
+        text: text || "",
         date: msg.date,
         senderUserId: msg.sender_id?.user_id || null,
         forwardInfo: msg.forward_info || null,
+        imagePath,
       }).catch((err) => console.error("Pipeline error:", err));
     }
   };
@@ -448,15 +487,30 @@ function stopMessageListener() {
   }
 }
 
-function extractText(msg: any): string | null {
+interface ExtractedContent {
+  text: string | null;
+  photoFileId: number | null;
+}
+
+function extractContent(msg: any): ExtractedContent {
   const content = msg.content;
-  if (!content) return null;
+  if (!content) return { text: null, photoFileId: null };
+
+  let text: string | null = null;
+  let photoFileId: number | null = null;
 
   if (content._ === "messageText") {
-    return content.text?.text || null;
+    text = content.text?.text || null;
+  } else if (content._ === "messagePhoto") {
+    text = content.caption?.text || null;
+    const sizes = content.photo?.sizes;
+    if (sizes?.length) {
+      const largest = sizes[sizes.length - 1];
+      photoFileId = largest.photo?.id ?? null;
+    }
+  } else if (content.caption?.text) {
+    text = content.caption.text;
   }
-  if (content.caption?.text) {
-    return content.caption.text;
-  }
-  return null;
+
+  return { text, photoFileId };
 }

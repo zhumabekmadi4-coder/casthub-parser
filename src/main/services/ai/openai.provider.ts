@@ -173,4 +173,37 @@ export class OpenAIProvider implements AiProvider {
     const result = await this.chat("vacancy", finalPrompt, text, true);
     return this.parseJson<ExtractedVacancy>(result);
   }
+
+  async extractTextFromImage(imagePath: string): Promise<string | null> {
+    const fs = await import("fs");
+    const imageBuffer = fs.readFileSync(imagePath);
+    const base64 = imageBuffer.toString("base64");
+    const ext = imagePath.split(".").pop()?.toLowerCase() || "jpg";
+    const mime = ext === "png" ? "image/png" : "image/jpeg";
+
+    const response = await openaiSemaphore.run(() =>
+      this.client.chat.completions.create({
+        model: "gpt-4o-mini",
+        max_tokens: 2000,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Extract ALL text from this image exactly as written. Return ONLY the extracted text, nothing else. If no text is found, return an empty string.",
+              },
+              {
+                type: "image_url",
+                image_url: { url: `data:${mime};base64,${base64}` },
+              },
+            ],
+          },
+        ],
+      })
+    );
+
+    const text = response.choices[0]?.message?.content?.trim();
+    return text || null;
+  }
 }
